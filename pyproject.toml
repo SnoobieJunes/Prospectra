@@ -1,0 +1,81 @@
+# 2026-07-13 (P0): Project metadata, dependencies, and quality-gate configuration.
+# Why: one reproducible source for the toolchain (uv/ruff/mypy/pytest/import-linter) across
+# Windows/Linux/macOS. Heavy engine deps (duckdb, pandas, statsmodels, scikit-learn, LLM SDKs)
+# are added in the phase that first imports them, per the approved build plan.
+
+[project]
+name = "prospectra"
+version = "0.0.1"
+description = "Your data buddy: prep flows, statistical mining (correlations, regressions, ANOVA, PCA), dashboards, and LLM-assisted explanations for your data."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+authors = [{ name = "SnoobieJunes" }]
+dependencies = [
+    "pyside6>=6.7",
+    "platformdirs>=4.0",
+]
+
+[project.urls]
+Repository = "https://github.com/SnoobieJunes/Prospectra"
+
+[project.scripts]
+prospectra = "prospectra.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-qt>=4.4",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "import-linter>=2",
+    "pre-commit>=3.7",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["prospectra"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+qt_api = "pyside6"
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+
+# Core is the headless engine — it gets the strict treatment; UI code stays pragmatic.
+[[tool.mypy.overrides]]
+module = ["prospectra.core.*", "prospectra.example_data"]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_any_generics = true
+warn_return_any = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+# Architecture guarantee from the build plan: the engine must run headless on any OS.
+[tool.importlinter]
+root_packages = ["prospectra"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "core stays Qt-free and UI-free (headless engine guarantee)"
+type = "forbidden"
+source_modules = ["prospectra.core", "prospectra.example_data"]
+forbidden_modules = ["prospectra.ui", "PySide6"]

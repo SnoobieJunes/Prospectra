@@ -1,0 +1,16 @@
+# 2026-07-13 (P0): Fast hygiene hooks only (ruff lint+format, import contract).
+# Why: keep commits quick; mypy and pytest run via `uv run` / CI, not on every commit.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.21
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+  - repo: local
+    hooks:
+      - id: import-linter
+        name: import-linter (core stays Qt-free)
+        entry: uv run lint-imports
+        language: system
+        pass_filenames: false

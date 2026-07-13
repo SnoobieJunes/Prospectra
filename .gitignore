@@ -1,0 +1,17 @@
+# 2026-07-13 (P0): Standard Python/Qt/uv ignores. Why: keep generated artifacts out of the repo.
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+.coverage
+htmlcov/
+.DS_Store
+# SQLite sidecar files for .prospectra project files opened during development
+*.prospectra-journal
+*.prospectra-wal
+*.prospectra-shm
