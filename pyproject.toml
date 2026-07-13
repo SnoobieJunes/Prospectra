@@ -14,6 +14,10 @@ authors = [{ name = "SnoobieJunes" }]
 dependencies = [
     "pyside6>=6.7",
     "platformdirs>=4.0",
+    "duckdb>=1.5.4",
+    "pandas>=3.0.3",
+    "python-calamine>=0.8.2",
+    "sqlalchemy>=2.0.51",
 ]
 
 [project.urls]
@@ -30,6 +34,7 @@ dev = [
     "mypy>=1.10",
     "import-linter>=2",
     "pre-commit>=3.7",
+    "openpyxl>=3.1.5",
 ]
 
 [build-system]
@@ -51,7 +56,9 @@ testpaths = ["tests"]
 qt_api = "pyside6"
 
 [tool.mypy]
-python_version = "3.11"
+# Analysis target 3.12: numpy's stubs use PEP 695 syntax mypy rejects under 3.11. Runtime floor
+# stays 3.11 (requires-python) and ruff's target-version py311 still polices our own syntax.
+python_version = "3.12"
 warn_unused_ignores = true
 warn_redundant_casts = true
 no_implicit_optional = true
@@ -68,6 +75,15 @@ warn_return_any = true
 [[tool.mypy.overrides]]
 module = "tests.*"
 disallow_untyped_defs = false
+
+# pandas ships no inline types; numpy's stubs use PEP 695 syntax newer than our 3.11 floor.
+[[tool.mypy.overrides]]
+module = ["pandas", "pandas.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["numpy", "numpy.*"]
+follow_imports = "skip"
 
 # Architecture guarantee from the build plan: the engine must run headless on any OS.
 [tool.importlinter]

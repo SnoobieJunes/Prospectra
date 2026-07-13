@@ -26,10 +26,13 @@ def _placeholder_page(text: str) -> QWidget:
     return page
 
 
-def make_central() -> QTabWidget:
+# 2026-07-13 (P1): `overrides` lets phases swap a placeholder for the real workspace widget
+# without touching the shell layout (Data lands in P1, Flow in P2, …).
+def make_central(overrides: dict[str, QWidget] | None = None) -> QTabWidget:
     tabs = QTabWidget()
     tabs.setObjectName("central_tabs")
     tabs.setDocumentMode(True)
+    overrides = overrides or {}
     for title, text in _PLACEHOLDERS:
-        tabs.addTab(_placeholder_page(text), title)
+        tabs.addTab(overrides.get(title) or _placeholder_page(text), title)
     return tabs
