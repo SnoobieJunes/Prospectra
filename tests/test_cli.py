@@ -11,9 +11,35 @@ from prospectra.core.flow import FlowGraph
 from prospectra.core.project import ProjectStore
 
 
-def test_scan_is_an_honest_stub(capsys):
-    assert main(["scan", "data.csv", "--target", "sales"]) == 2
-    assert "P3" in capsys.readouterr().err
+def test_scan_end_to_end(tmp_path, capsys):
+    """The P3 acceptance path: point the CLI at the tutorial dataset and require the ranked table
+    to lead with the planted driver while the decoys stay out of the findings."""
+    from prospectra.example_data import write_csv
+
+    path = write_csv(tmp_path / "ice.csv", days=500)
+    assert main(["scan", str(path), "--target", "ice_cream_sales", "--pca"]) == 0
+
+    out = capsys.readouterr().out
+    assert "WHAT EXPLAINS ice_cream_sales" in out
+    # the ranked table leads with the strongest planted driver
+    ranked = out.split("WHAT EXPLAINS")[1].splitlines()
+    first_row = next(line for line in ranked[2:] if line.strip())
+    assert first_row.split()[0] == "temperature_c"
+    # the combined model recovers the planted equation, and PCA teaches what it is
+    assert "BEST COMBINED MODEL" in out
+    assert "TRUST:" in out
+    assert "never looked at your target" in out
+    # decoys are reported as rejected, not as findings
+    rejected = out.split("rejected by FDR")[1]
+    assert "lottery_numbers" in rejected
+
+
+def test_scan_rejects_a_bad_target(tmp_path, capsys):
+    from prospectra.example_data import write_csv
+
+    path = write_csv(tmp_path / "ice.csv", days=60)
+    assert main(["scan", str(path), "--target", "not_a_column"]) == 1
+    assert "Cannot use" in capsys.readouterr().err
 
 
 def test_run_flow_end_to_end(tmp_path, capsys):

@@ -62,6 +62,30 @@ Entry format:
   machine" claims worthless. One pinned version across all three OSes.
 - Commit(s): eee92ab
 
+## 2026-07-13 — P3 multivariate selection uses BIC, not adjusted R²
+- Phase: P3
+- Deviation: the plan specified "multivariate via Lasso path + forward selection"; forward
+  selection is scored on **BIC**, with LassoCV kept as a reported cross-check rather than as the
+  selector.
+- Why: forced by a failing acceptance test, not by preference. Forward selection on adjusted R²
+  admitted `competitor_promo` — a pure-noise decoy — into the model of the tutorial dataset
+  (standardized β = -0.016), because with n≈1100 the adj-R² penalty (n-1)/(n-k-1) is far too weak
+  to exclude noise. BIC penalises each parameter by ~ln(n) ≈ 7 and recovers exactly the three
+  planted drivers. Reporting a noise variable as a driver is the worst failure this tool could
+  have, so the criterion changed.
+- Commit(s): this commit
+
+## 2026-07-13 — P3 PCA ships scree + loadings + narrative; no biplot yet
+- Phase: P3
+- Deviation: the plan listed a biplot alongside the scree plot and loadings table.
+- Why: the scree chart, the loadings table, and the plain-English narrative already answer "what
+  are the components and what drives them" for a first-time PCA user, which was the point. The
+  biplot needs the scores overlaid with loading vectors and a legend scheme that earns its
+  complexity; it belongs with the dashboards work (P5) where the chart layer gets its real
+  treatment. `PCAResult.scores` already carries the first two components' scores, so the biplot is
+  a chart-only addition when it lands.
+- Commit(s): this commit
+
 ## 2026-07-13 — Linux GUI launch runs under Xvfb, not the bare runner
 - Phase: P2
 - Deviation: CI's GUI-launch step uses the native platform plugin on Windows/macOS but `xvfb-run`

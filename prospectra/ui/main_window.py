@@ -1,3 +1,5 @@
+# 2026-07-13 (P3): Analyze workspace wired in — its dataset list follows the catalog, and
+# findings can be saved into the open project (with their sample seed, so they reproduce).
 # 2026-07-13 (P2): Flow workspace wired in — Save/Open Flow persist the canvas graph into the
 # open .prospectra project (flows are versioned JSON docs in the project store).
 # 2026-07-13 (P1): Main window now owns the Catalog session and wires the Sources dock to real
@@ -18,7 +20,9 @@ from prospectra import __version__
 from prospectra.core.catalog import Catalog, Dataset, SqlConnection
 from prospectra.core.connectors import SUPPORTED_FILE_SUFFIXES
 from prospectra.core.flow import FlowError, FlowGraph
+from prospectra.core.mining import save_scan
 from prospectra.core.project import ProjectStore, ProjectStoreError
+from prospectra.ui.analysis.analyze_tab import AnalyzeTab
 from prospectra.ui.data.data_tab import DataTab
 from prospectra.ui.dialogs.add_database import AddDatabaseDialog
 from prospectra.ui.docks.buddy import BuddyDock
@@ -46,7 +50,10 @@ class MainWindow(QMainWindow):
 
         self._data_tab = DataTab(self.catalog)
         self._flow_tab = FlowTab()
-        self._tabs = make_central({"Data": self._data_tab, "Flow": self._flow_tab})
+        self._analyze_tab = AnalyzeTab(self.catalog)
+        self._tabs = make_central(
+            {"Data": self._data_tab, "Flow": self._flow_tab, "Analyze": self._analyze_tab}
+        )
         self.setCentralWidget(self._tabs)
 
         self._sources = SourcesDock()
@@ -98,6 +105,9 @@ class MainWindow(QMainWindow):
         load_flow = QAction("Open &Flow from Project…", self)
         load_flow.triggered.connect(self._load_flow)
         file_menu.addAction(load_flow)
+        save_findings = QAction("Save F&indings to Project", self)
+        save_findings.triggered.connect(self._save_findings)
+        file_menu.addAction(save_findings)
         file_menu.addSeparator()
         quit_action = QAction("&Quit", self)
         quit_action.setShortcut("Ctrl+Q")
@@ -130,6 +140,7 @@ class MainWindow(QMainWindow):
             self._sources.add_dataset(ds)
         if datasets:
             self._show_dataset(datasets[0].id)
+        self._analyze_tab.refresh_datasets()
         self.statusBar().showMessage(f"Opened {len(datasets)} dataset(s)")
 
     def _add_database(self) -> None:
@@ -163,6 +174,7 @@ class MainWindow(QMainWindow):
     def _table_opened(self, dataset: Dataset) -> None:
         self._sources.add_dataset(dataset)
         self._show_dataset(dataset.id)
+        self._analyze_tab.refresh_datasets()
 
     def _show_dataset(self, dataset_id: str) -> None:
         self._tabs.setCurrentWidget(self._data_tab)
@@ -235,6 +247,19 @@ class MainWindow(QMainWindow):
         self._flow_tab.load_graph(graph)
         self._tabs.setCurrentWidget(self._flow_tab)
         self.statusBar().showMessage(f"Opened flow '{record.name}'")
+
+    def _save_findings(self) -> None:
+        if self._store is None:
+            QMessageBox.information(self, "No project open", "Create or open a project first.")
+            return
+        scan = self._analyze_tab._scan
+        if scan is None:
+            QMessageBox.information(self, "No findings", "Run a scan on the Analyze tab first.")
+            return
+        count = save_scan(self._store, scan)
+        self.statusBar().showMessage(
+            f"Saved {count} finding(s) to {self._store.path.name} (seed {scan.seed})"
+        )
 
     def _attach(self, store: ProjectStore) -> None:
         if self._store is not None:

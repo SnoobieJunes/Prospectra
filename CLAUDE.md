@@ -34,7 +34,22 @@ Repo: https://github.com/SnoobieJunes/Prospectra
 - P0 (skeleton: app shell, project store, headless CLI, example dataset, tooling) — done 2026-07-13.
 - P1 (connectors, catalog, virtualized grid, column profiler, sampling) — done 2026-07-13.
 - P2 (flow engine + node set + canvas UI + headless `run-flow` + cross-OS CI) — done 2026-07-13.
-- Next: P3 — mining engine (correlation scan + BH-FDR, regression ladder, ANOVA, PCA, findings).
+- P3 (mining engine: pair tests + BH-FDR, regression ladder, multivariate model, ANOVA, PCA,
+  diagnostics, Analyze workspace, headless `scan`) — done 2026-07-13.
+- Next: P4 — LLM data buddy + hypothesis engine (4 providers, keyring, privacy gates, web-cited
+  explanations for findings).
+
+### Statistical rules (do not regress these)
+- **Never rank R² across different response transforms.** A log-y model's R² describes ln(y), not
+  y. `core/stats/regression.py` back-transforms predictions and scores every form on the original
+  target scale (`Fit.r2`); the model's own value is kept separately as `Fit.native_r2`.
+- **Every scan of many pairs gets Benjamini-Hochberg FDR** (`core/stats/fdr.py`). Without it a
+  26-column scan reports ~16 false trends. Driver fits are their own FDR family.
+- **Model selection uses BIC, not adjusted R².** With n≈1100 the adj-R² penalty is weak enough
+  that a pure-noise column got into the model; BIC (~ln(n) per parameter) keeps it out.
+- **Findings are associational, never causal.** No "causes"/"drives"/"because" in headlines — a
+  test in `tests/test_mining.py` enforces this.
+- PCA is unsupervised and cannot answer "what drives X"; the narrative and UI say so explicitly.
 
 ### Commands
 - `uv sync` — install (uv provisions Python 3.12 per `.python-version`; system python is 3.9)

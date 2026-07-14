@@ -6,11 +6,20 @@ relationships (correlation scans with FDR correction, regressions ranked by R² 
 ANOVA, PCA), visualizes findings on dashboards, and uses LLMs plus web search to hypothesize —
 with cited sources — *why* those relationships might exist.
 
-**Status: pre-alpha (P2 done).** Working today: data connectors (CSV/TSV/text, JSON, Parquet,
-Excel, and any SQL database by SQLAlchemy URL), a virtualized data grid with a column profiler,
-and the **prep flow canvas** — a Tableau-Prep-style node editor with 12 prep steps that compiles a
-whole pipeline into a single DuckDB query. The mining engine (regressions, ANOVA, PCA) is P3; the
-LLM data buddy is P4. Anything not built yet says so in the UI rather than pretending.
+**Status: pre-alpha (P3 done).** Working today:
+
+- **Connect** — CSV/TSV/text, JSON, Parquet, Excel, and any SQL database by SQLAlchemy URL.
+- **Prep** — a Tableau-Prep-style flow canvas with 12 node types that compiles an entire pipeline
+  into a single DuckDB query.
+- **Mine** — point it at data and it finds what's interesting: every pair of columns tested with
+  the right test for its types, false-discovery-rate control so noise columns don't masquerade as
+  trends, a regression ladder (linear / log / exponential / power / quadratic) ranked by adjusted
+  R², a BIC-selected combined model with standardized coefficients and VIF, a plain-English trust
+  light on the model's assumptions, and PCA with a narrative that explains what it does and does
+  not tell you.
+
+The LLM data buddy and the web-cited hypothesis engine are P4. Anything not built yet says so in
+the UI rather than pretending.
 
 ## Quickstart
 
@@ -56,8 +65,22 @@ The whole engine runs without a display (this is what CI exercises):
 ```sh
 uv run prospectra generate-example                 # seeded tutorial dataset
 uv run prospectra run-flow <project.prospectra> <flow-name>   # run a saved flow
-uv run prospectra scan <file> --target <column>    # arrives in P3
+uv run prospectra scan examples/ice_cream_sales.csv --target ice_cream_sales --pca
 ```
+
+That last command mines the tutorial dataset, whose answer is known by construction: sales were
+generated from temperature, school holidays, and ad spend, plus two decoy columns of pure noise.
+The scan ranks the three real drivers at the top, rejects both decoys via FDR control, and
+recovers the planted equation in its combined model (adjusted R² = 0.90).
+
+## A word on what this tool will and won't tell you
+
+It reports **associations, never causes.** Two columns can move together because one drives the
+other, because something else drives both, or by coincidence — and no statistic can tell those
+apart. In the tutorial dataset, humidity looks like it explains a third of ice cream sales; it
+explains none of it, and is simply anti-correlated with temperature. Prospectra surfaces the
+association, ranks it below the real drivers, and leaves the interpretation to you (with P4's
+hypothesis engine offering cited leads).
 
 ## Architecture in one paragraph
 
