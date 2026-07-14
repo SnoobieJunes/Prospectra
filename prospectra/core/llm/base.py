@@ -72,6 +72,12 @@ class Provider(ABC):
     default_model: ClassVar[str]
     supports_web_search: ClassVar[bool] = False
     needs_api_key: ClassVar[bool] = True
+    # 2026-07-14 (P6): does this provider take a user-supplied endpoint? (Ollama, and any
+    # OpenAI-compatible endpoint such as Muse Spark.) The settings dialog reads this instead of
+    # testing provider names, so a new endpoint-style provider needs no change to the UI.
+    supports_custom_endpoint: ClassVar[bool] = False
+    # A one-paragraph setup note the settings dialog shows when this provider is picked.
+    setup_hint: ClassVar[str] = ""
     # Honesty flag surfaced in the UI: has this provider been exercised against its live API in
     # this build? Only flip to True once a real call has been made and observed.
     verified: ClassVar[bool] = False

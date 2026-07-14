@@ -15,3 +15,7 @@ htmlcov/
 *.prospectra-journal
 *.prospectra-wal
 *.prospectra-shm
+
+# 2026-07-14 (P6): PyInstaller output — built artifacts belong to CI, not to the repo.
+/dist/
+/build/

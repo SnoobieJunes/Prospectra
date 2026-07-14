@@ -19,6 +19,7 @@ import duckdb
 
 from prospectra.core.connectors.base import ConnectorStatus, DatasetRef
 from prospectra.core.connectors.registry import file_connector_for
+from prospectra.core.connectors.rest import RestConnector, RestMapping
 from prospectra.core.connectors.sql_alchemy import SQLAlchemyConnector
 from prospectra.core.sqlutil import ident
 from prospectra.core.stats import TableProfile, profile_relation
@@ -139,6 +140,26 @@ class Catalog:
         )
         self.datasets[ds.id] = ds
         logger.info("Opened table %s from connection %s", table, conn.name)
+        return ds
+
+    # -- APIs (P6) -----------------------------------------------------------------------
+
+    def open_api(self, mapping: RestMapping, secret: str | None = None) -> Dataset:
+        """Fetch a REST mapping and land it as a table. Materialized: never re-hit the API per
+        query — a view over a network source would do exactly that."""
+        connector = RestConnector(mapping, secret)
+        view = self._next_view()
+        ref = connector.list_datasets()[0]
+        connector.install(self.cursor(), ref, view)
+        report = connector.last_report
+        detail = (
+            f"api: {mapping.url} ({report.records:,} records)"
+            if report is not None
+            else f"api: {mapping.url}"
+        )
+        ds = Dataset(id=uuid.uuid4().hex, name=mapping.name, view_name=view, origin=detail)
+        self.datasets[ds.id] = ds
+        logger.info("Opened API dataset %s from %s", mapping.name, mapping.url)
         return ds
 
     # -- queries used by the grid & profiler ------------------------------------------

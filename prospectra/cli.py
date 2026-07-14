@@ -1,3 +1,6 @@
+# 2026-07-14 (P6): `connectors` — print every connector, dialect, and LLM provider with its honest
+# status badge and whether its driver is installed. One command answers "what can this actually talk
+# to, right now, on this machine?" — which is exactly the question the badges exist to answer.
 # 2026-07-14 (P5): `scrape` — fetch a page (robots.txt obeyed, per-host rate limited), extract its
 # tables, and write them as CSVs that any flow or scan can read. Accepts a local .html path or a
 # file:// URL too, which is how CI exercises the whole scrape path with no network.
@@ -51,6 +54,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     scrape.add_argument("--max-tables", type=int, help="Keep only the first N tables")
 
+    sub.add_parser(
+        "connectors", help="List every connector, database dialect, and LLM provider + its status"
+    )
+
     gen = sub.add_parser(
         "generate-example", help="Write the synthetic ice-cream tutorial dataset (seeded)"
     )
@@ -66,6 +73,8 @@ def main(argv: list[str] | None = None) -> int:
         return _run_flow(args.project, args.flow)
     if args.command == "scrape":
         return _scrape(args.url, args.out, args.tables_only, args.max_tables)
+    if args.command == "connectors":
+        return _connectors()
     if args.command == "generate-example":
         from prospectra.example_data import write_csv
 
@@ -183,6 +192,62 @@ def _scrape(url: str, out: str, tables_only: bool, max_tables: int | None) -> in
     if result.article_path is not None:
         print(f"  {result.article_path}  {result.article_title}")
     print("\nOpen any of these with `prospectra scan <file>` or in the app (Sources ▸ Open File…).")
+    return 0
+
+
+def _connectors() -> int:
+    from prospectra.core.connectors import (
+        DIALECTS,
+        SUPPORTED_FILE_SUFFIXES,
+        external_connectors,
+        jdbc_available,
+    )
+    from prospectra.core.llm import PROVIDERS
+
+    def badge(status: str) -> str:
+        return "verified " if status == "verified" else "EXPERIMENTAL"
+
+    print("\nFILES")
+    print(f"  {', '.join(SUPPORTED_FILE_SUFFIXES)}")
+    print("  (.pdf needs `uv sync --extra pdf`; .sav/.dta/.sas7bdat need `--extra stats-files`)")
+
+    print("\nDATABASES (one generic SQLAlchemy connector; these are the forms it knows)")
+    print(f"  {'dialect':<26} {'status':<13} driver")
+    for dialect in DIALECTS:
+        driver = (
+            "built in"
+            if not dialect.driver_package
+            else (
+                "installed" if dialect.driver_installed else f"MISSING — {dialect.install_hint()}"
+            )
+        )
+        print(f"  {dialect.display_name:<26} {badge(dialect.status):<13} {driver}")
+    print(
+        f"  {'Generic JDBC':<26} {'EXPERIMENTAL':<13} "
+        f"{'installed' if jdbc_available() else 'MISSING — uv sync --extra jdbc (needs a JVM)'}"
+    )
+
+    print("\nAPIs")
+    print(f"  {'REST / OData (mapping)':<26} {'EXPERIMENTAL':<13} built in")
+
+    plugins = external_connectors()
+    print("\nPLUGINS (installed, via the prospectra.connectors entry point)")
+    if not plugins:
+        print("  (none)")
+    for name, cls in sorted(plugins.items()):
+        print(f"  {cls.display_name:<26} {badge(cls.status):<13} {name}")
+
+    print("\nLLM PROVIDERS")
+    for provider in PROVIDERS.values():
+        note = "custom endpoint (URL + key + model)" if provider.supports_custom_endpoint else ""
+        status = badge("verified" if provider.verified else "x")
+        print(f"  {provider.display_name:<44} {status:<13} {note}")
+
+    print(
+        "\nEXPERIMENTAL means: implemented and tested against scripted servers, but never run\n"
+        "against a real one from this build. It is not a guess about whether it works — it is a\n"
+        "statement that nobody has watched it work.\n"
+    )
     return 0
 
 

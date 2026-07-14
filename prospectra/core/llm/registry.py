@@ -10,6 +10,7 @@ from prospectra.core.llm.audit import AuditLog
 from prospectra.core.llm.base import LLMError, Provider
 from prospectra.core.llm.providers.anthropic_provider import AnthropicProvider
 from prospectra.core.llm.providers.google_provider import GoogleProvider
+from prospectra.core.llm.providers.muse_spark import MuseSparkProvider
 from prospectra.core.llm.providers.openai_provider import OllamaProvider, OpenAIProvider
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,8 @@ PROVIDERS: dict[str, type[Provider]] = {
     OpenAIProvider.type_name: OpenAIProvider,
     GoogleProvider.type_name: GoogleProvider,
     OllamaProvider.type_name: OllamaProvider,
+    # 2026-07-14 (P6): a user-supplied OpenAI-standard endpoint (URL + key + model).
+    MuseSparkProvider.type_name: MuseSparkProvider,
 }
 
 

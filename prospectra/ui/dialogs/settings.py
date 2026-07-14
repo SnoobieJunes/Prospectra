@@ -90,12 +90,20 @@ class BuddySettingsDialog(QDialog):
 
     def _provider_changed(self) -> None:
         cls = PROVIDERS[self._provider.currentData()]
-        self._model.setPlaceholderText(cls.default_model)
+        self._model.setPlaceholderText(cls.default_model or "required — the endpoint's model id")
         self._key.setEnabled(cls.needs_api_key)
-        self._base_url.setEnabled(not cls.needs_api_key or cls.type_name == "openai")
+        # 2026-07-14 (P6): driven by the provider's declared capability, not by its name, so a new
+        # OpenAI-compatible provider (Muse Spark) needs no edit here.
+        self._base_url.setEnabled(cls.supports_custom_endpoint)
+        self._base_url.setPlaceholderText(
+            "required — the endpoint's OpenAI-compatible root, e.g. https://api.musespark.ai/v1"
+            if cls.type_name == "muse_spark"
+            else "http://localhost:11434/v1"
+        )
         existing = _safe_get_key(cls.type_name)
         self._key.setText(existing or "")
-        note = "" if cls.needs_api_key else "Runs locally — no data leaves this machine."
+        local_note = "" if cls.needs_api_key else "Runs locally — no data leaves this machine."
+        note = cls.setup_hint or local_note
         if not cls.verified:
             note += (
                 "  Experimental: the request format is implemented but has not been run against "

@@ -42,8 +42,33 @@ Repo: https://github.com/SnoobieJunes/Prospectra
 - P5 (scraper + `scrape` CLI, ChartSpec dashboards, drag-and-drop backbone) — done 2026-07-14.
   Proven end to end against **live Wikipedia**: scraped the GDP table → 7-node prep flow →
   FDR-controlled finding → chart on a dashboard saved in the project file.
-- Next: P6 — connector breadth (warehouse dialects, ODBC/JDBC, REST + mapping tool), Jira reference
-  plugin, plugin docs, PyInstaller builds for all 3 OSes.
+- P6 (connector breadth: 12 dialect descriptors, REST/OData mapping tool, JDBC, PDF + SPSS/Stata/SAS,
+  Jira reference plugin, `Input: Database` flow node, PyInstaller packaging) — done 2026-07-14.
+  Proven: SQLite dialect form -> connection -> flow over a **database table** -> headless rerun; the
+  macOS bundle was built and launched. Everything except SQLite is badged experimental.
+- Also P6: **Muse Spark** LLM provider — a user-supplied OpenAI-compatible endpoint (URL + key +
+  model, all three required).
+- All phases P0-P6 delivered. Remaining known gaps are in Deviations.md (JS-rendered scraping,
+  LLM-assisted extraction, PCA biplot, flow undo stack, free-form dashboard layout).
+
+### Connector rules (do not regress these)
+- **A dialect is a descriptor, not a class.** `core/connectors/dialects.py` declares fields, URL
+  template, and driver package; the UI renders the form from it. Adding a warehouse is one entry.
+- **A path is not a credential.** `Field.path_like` decides the quoting: paths keep their separators,
+  everything else is fully escaped. Escaping a SQLite path's slashes made SQLAlchemy *silently create
+  an empty database* and report a good connection — found by running the acceptance path, not a test.
+- **A missing SQLite file is an error**, because SQLite would otherwise create an empty one and the
+  user would see a healthy connection with no tables.
+- **Passwords never reach the project file.** `redact_url()` strips them; the real secret goes to the
+  OS keychain and the connection record holds a `secret_ref`.
+- **Don't reimplement HTTP for a SaaS source** — describe it as a `RestMapping` (auth + pagination +
+  paths->columns). The Jira plugin is the reference: ~60 lines, and it is a real installed
+  distribution loaded through the `prospectra.connectors` entry point.
+- **A paginator must have caps and must confess when it hits one.** An API that always returns a
+  "next" cursor exists; `FetchReport.notes` says "there may be more" rather than implying completeness.
+- **The packaged app needs `copy_metadata` for every bundled plugin.** PyInstaller ships no
+  `.dist-info`, so `entry_points()` finds nothing and plugins silently vanish from a build that
+  otherwise looks perfect. CI asserts the bundled binary still lists the Jira plugin.
 
 ### Scraper rules (do not regress these)
 - **robots.txt is obeyed, and the check happens *before* the request** (`core/scraper/fetcher.py`).
@@ -109,6 +134,10 @@ Repo: https://github.com/SnoobieJunes/Prospectra
 - `uv run prospectra run-flow <project> <flow>` — run a saved flow headless
 - `uv run prospectra scrape <url> --out <dir>` — scrape a page's tables to CSV (robots.txt obeyed;
   accepts a local .html path or `file://`, which is how CI exercises it without a network)
+- `uv run prospectra connectors` — every connector, dialect, plugin, and LLM provider with its
+  honest status and whether its driver is installed on this machine
+- `uv run pyinstaller packaging/prospectra.spec --noconfirm` — build the desktop app
+- Optional extras: `uv sync --extra pdf|stats-files|odbc|jdbc` (jdbc also needs a JVM)
 - `uv run pytest` · `uv run ruff check .` · `uv run mypy prospectra` · `uv run lint-imports`
 
 ### Cross-OS rule (non-negotiable)

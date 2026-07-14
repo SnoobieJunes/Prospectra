@@ -6,9 +6,13 @@ relationships (correlation scans with FDR correction, regressions ranked by R² 
 ANOVA, PCA), visualizes findings on dashboards, and uses LLMs plus web search to hypothesize —
 with cited sources — *why* those relationships might exist.
 
-**Status: pre-alpha (P5 done).** Working today:
+**Status: pre-alpha — all phases (P0–P6) delivered.** Working today:
 
-- **Connect** — CSV/TSV/text, JSON, Parquet, Excel, and any SQL database by SQLAlchemy URL.
+- **Connect** — CSV/TSV/text, JSON, Parquet, Excel, PDF tables, SPSS/Stata/SAS; 12 database
+  dialects with generated connection forms (SQLite, Postgres, MySQL, SQL Server, Snowflake,
+  BigQuery, Redshift, Databricks, Athena, Trino, Oracle, ODBC) plus generic JDBC; and **any JSON
+  REST/OData API** via a saved mapping (auth + pagination + paths→columns), with the columns
+  auto-suggested from a sample response.
 - **Prep** — a Tableau-Prep-style flow canvas with 12 node types that compiles an entire pipeline
   into a single DuckDB query.
 - **Mine** — point it at data and it finds what's interesting: every pair of columns tested with
@@ -30,11 +34,20 @@ with cited sources — *why* those relationships might exist.
   or onto "New dataset" (which derives the dataset *and* writes the flow that rebuilds it); a
   dataset onto the flow canvas to become an Input node; a finding into the chat to ask about it.
 
-Anything not built yet says so in the UI rather than pretending.
+- **Extend** — connectors, flow nodes, LLM providers, and chart types are entry-point plugins.
+  `plugins/prospectra_jira` is the reference: a real installed distribution, ~60 lines, which
+  *describes* Jira's API rather than reimplementing HTTP. See `docs/writing-a-connector.md`.
 
-> **The four LLM providers are badged "experimental."** Their request formats are implemented and
-> the whole pipeline around them is tested, but no provider has been run against its live API in
-> this build (there are no keys here). Nothing claims to work that hasn't been observed working.
+Anything not built yet says so in the UI rather than pretending. Run `uv run prospectra connectors`
+to see every source, its status badge, and whether its driver is installed on your machine.
+
+> **Almost everything that talks to a third party is badged "experimental."** The five LLM
+> providers (Anthropic, OpenAI, Gemini, Ollama, and Muse Spark — a custom OpenAI-compatible
+> endpoint you point at yourself), every database dialect except SQLite, the REST tier, and the Jira
+> plugin all have their request formats implemented and tested against scripted servers — but none
+> has been run against a real live service from this build, because there are no credentials here.
+> A badge flips to "verified" only after someone makes a real call and watches it work. Nothing
+> claims to work that hasn't been observed working.
 
 ## Your data stays yours
 
@@ -99,6 +112,22 @@ each OS (see `.github/workflows/ci.yml`).
 4. Hit **Preview selected** — the profile cards and data preview below the canvas fill in.
 5. Add an **Output** node, give it a `.csv` path, and hit **Run flow**.
 
+## Install the app
+
+Prebuilt artifacts for Windows, Linux, and macOS are produced by CI on every commit
+(`.github/workflows/ci.yml`), and each one is launched by the build job before it is uploaded — a
+build that succeeds but has lost its plugins is a build that fails here.
+
+Build it yourself:
+
+```sh
+uv run pyinstaller packaging/prospectra.spec --noconfirm    # -> dist/
+```
+
+The builds are **unsigned**: Windows SmartScreen will warn on first launch, and macOS Gatekeeper
+needs a right-click ▸ Open. That is the cost of shipping without a paid signing certificate, and it
+is recorded in `Deviations.md`.
+
 ## Headless CLI
 
 The whole engine runs without a display (this is what CI exercises):
@@ -108,6 +137,7 @@ uv run prospectra generate-example                 # seeded tutorial dataset
 uv run prospectra run-flow <project.prospectra> <flow-name>   # run a saved flow
 uv run prospectra scan examples/ice_cream_sales.csv --target ice_cream_sales --pca
 uv run prospectra scrape <url> --out scraped/          # a page's tables -> CSVs
+uv run prospectra connectors                          # what can this talk to, right now?
 ```
 
 That last command mines the tutorial dataset, whose answer is known by construction: sales were

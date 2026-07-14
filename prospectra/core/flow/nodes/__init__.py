@@ -5,6 +5,7 @@ from prospectra.core.flow.nodes import (  # noqa: F401  (import = registration)
     calculated,
     clean_nulls,
     filter_rows,
+    input_database,
     input_file,
     join,
     outliers,

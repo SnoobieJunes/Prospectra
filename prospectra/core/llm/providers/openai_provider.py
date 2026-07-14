@@ -27,6 +27,7 @@ class OpenAIProvider(Provider):
     display_name = "OpenAI"
     default_model = "gpt-5"
     supports_web_search = False  # not wired up here; see Deviations.md
+    supports_custom_endpoint = True  # an OpenAI-compatible gateway can be pointed at by URL
     verified = False
 
     def _client(self) -> Any:
@@ -125,6 +126,7 @@ class OllamaProvider(OpenAIProvider):
     display_name = "Ollama (local)"
     default_model = "llama3.1"
     needs_api_key = False
+    supports_custom_endpoint = True
     verified = False
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:

@@ -100,6 +100,7 @@ class NewDatasetZone(QLabel):
 class SourcesDock(QDockWidget):
     open_file_requested = Signal()
     add_database_requested = Signal()
+    add_api_requested = Signal()  # 2026-07-14 (P6)
     scrape_requested = Signal()  # 2026-07-14 (P5)
     dataset_activated = Signal(str)  # dataset id
     table_activated = Signal(str, str)  # connection id, table name
@@ -117,10 +118,13 @@ class SourcesDock(QDockWidget):
         open_button.clicked.connect(self.open_file_requested)
         add_button = QPushButton("Add Database…")
         add_button.clicked.connect(self.add_database_requested)
+        api_button = QPushButton("Add API…")
+        api_button.clicked.connect(self.add_api_requested)
         scrape_button = QPushButton("Scrape Web…")
         scrape_button.clicked.connect(self.scrape_requested)
         buttons.addWidget(open_button)
         buttons.addWidget(add_button)
+        buttons.addWidget(api_button)
         buttons.addWidget(scrape_button)
         layout.addLayout(buttons)
 

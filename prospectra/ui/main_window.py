@@ -25,7 +25,9 @@ from PySide6.QtWidgets import QFileDialog, QInputDialog, QMainWindow, QMessageBo
 from prospectra import __version__
 from prospectra.core.catalog import Catalog, Dataset, SqlConnection
 from prospectra.core.connectors import SUPPORTED_FILE_SUFFIXES
+from prospectra.core.connectors.dialects import redact_url
 from prospectra.core.flow import FlowError, FlowGraph, flow_from_columns, flow_readable
+from prospectra.core.llm import secrets as secret_store
 from prospectra.core.mining import save_scan
 from prospectra.core.project import ProjectStore, ProjectStoreError
 from prospectra.core.scraper import ScrapeResult, scrape
@@ -33,6 +35,7 @@ from prospectra.core.viz import Dashboard
 from prospectra.ui.analysis.analyze_tab import AnalyzeTab
 from prospectra.ui.dashboards.dashboard_tab import DashboardTab
 from prospectra.ui.data.data_tab import DataTab
+from prospectra.ui.dialogs.add_api import AddApiDialog
 from prospectra.ui.dialogs.add_database import AddDatabaseDialog
 from prospectra.ui.dialogs.scrape import ScrapeDialog
 from prospectra.ui.docks.buddy import BuddyDock
@@ -87,6 +90,7 @@ class MainWindow(QMainWindow):
 
         self._sources.open_file_requested.connect(self._open_data_file)
         self._sources.add_database_requested.connect(self._add_database)
+        self._sources.add_api_requested.connect(self._add_api)
         self._sources.scrape_requested.connect(self._scrape_web)
         self._sources.new_dataset_requested.connect(self._new_dataset_from_columns)
         self._sources.dataset_activated.connect(self._show_dataset)
@@ -182,6 +186,20 @@ class MainWindow(QMainWindow):
             return
         name, url = dialog.values()
 
+        # 2026-07-14 (P6): the password goes to the OS keychain and the project file keeps a URL
+        # with the credential redacted — a .prospectra file must never be a password leak.
+        secret = dialog.secret()
+        if secret and self._store is not None:
+            ref = f"db:{name}"
+            try:
+                secret_store.set_api_key(ref, secret)
+            except secret_store.SecretsError as exc:
+                logger.warning("Keychain unavailable; the password is not saved: %s", exc)
+                ref = ""
+            self._store.save_connection(name, "sqlalchemy", {"url": redact_url(url)}, ref or None)
+        elif self._store is not None:
+            self._store.save_connection(name, "sqlalchemy", {"url": redact_url(url)}, None)
+
         def connect() -> tuple[SqlConnection, list[str]]:
             conn = self.catalog.add_connection(name, url)
             return conn, self.catalog.list_tables(conn.id)
@@ -193,6 +211,39 @@ class MainWindow(QMainWindow):
         connection, tables = pair
         self._sources.add_connection(connection, tables)
         self.statusBar().showMessage(f"Connected: {connection.name} ({len(tables)} tables)")
+
+    # -- APIs (P6) --------------------------------------------------------------------
+
+    def _add_api(self) -> None:
+        dialog = AddApiDialog(self)
+        if not dialog.exec():
+            return
+        mapping = dialog.mapping()
+        token = dialog.token()
+        if token and mapping.auth.kind != "none":
+            # The credential goes to the OS keychain; the mapping saved into the project holds only
+            # the *reference* to it, so the project file is safe to share.
+            try:
+                secret_store.set_api_key(mapping.auth.secret_ref, token)
+            except secret_store.SecretsError as exc:
+                logger.warning("Keychain unavailable; the token is used this session only: %s", exc)
+        if self._store is not None:
+            self._store.save_connection(
+                mapping.name, "rest", mapping.to_dict(), mapping.auth.secret_ref or None
+            )
+
+        self.statusBar().showMessage(f"Fetching {mapping.url}…")
+        run_in_pool(
+            self.catalog.open_api,
+            mapping,
+            token or None,
+            on_result=self._api_opened,
+            on_error=self._source_error,
+        )
+
+    def _api_opened(self, dataset: Dataset) -> None:
+        self._datasets_opened([dataset])
+        self.statusBar().showMessage(f"Opened {dataset.name} — {dataset.origin}")
 
     def _open_table(self, connection_id: str, table: str) -> None:
         self.statusBar().showMessage(f"Loading table {table}…")
