@@ -147,7 +147,7 @@ Entry format:
   has been run against a live API yet (see the P4 entry) — building an unverified extraction path on
   top of an unverified provider path would produce a feature nobody could trust. Both are additive
   behind the existing `Fetcher` Protocol and `parse` seam, so neither needs rework to land in P6.
-- Commit(s): cf3006e
+- Commit(s): 090e665
 
 ## 2026-07-14 — P5: dashboards are a fixed 2-column grid, not a free-form canvas
 - Phase: P5
@@ -157,7 +157,7 @@ Entry format:
   is a UI affordance over an unchanged model, not a data-model change. The chart layer's real work
   in P5 was the honesty of what a chart says (truncation notes, log-scale drops, the one-axis rule)
   and the drop-shelf builder; free layout is polish that can land any time without migration.
-- Commit(s): cf3006e
+- Commit(s): 090e665
 
 ## 2026-07-14 — P5: PCA biplot still not built (promised here by the P3 deviation)
 - Phase: P5
@@ -168,7 +168,7 @@ Entry format:
   drops) — those are the things that stop a dashboard from lying. The biplot remains a chart-only
   addition: `PCAResult.scores` still carries the first two components, and `SpecChart` is now the
   place it plugs into. Deferred to P6, and it will keep being deferred honestly until it is drawn.
-- Commit(s): cf3006e
+- Commit(s): 090e665
 
 ## 2026-07-14 — P5: P2's canvas conveniences — one built, two still open
 - Phase: P5
@@ -180,7 +180,7 @@ Entry format:
 - Why: the dataset-drop was the one that the drag-and-drop backbone made nearly free and that the
   P2 entry named explicitly. Undo and the column picker are editor ergonomics with no bearing on
   what a flow can express or on any acceptance line; they are not silently dropped, they are here.
-- Commit(s): cf3006e
+- Commit(s): 090e665
 
 ## 2026-07-13 — Linux GUI launch runs under Xvfb, not the bare runner
 - Phase: P2
