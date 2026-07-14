@@ -148,7 +148,7 @@ Entry format:
   from here: there are no warehouse credentials in this environment, and per CLAUDE.md a badge flips
   only after a real connection is observed. `prospectra connectors` prints the whole matrix so the
   state is never a guess.
-- Commit(s): this commit
+- Commit(s): 92a1a95
 
 ## 2026-07-14 — P6: a new flow node (`Input: Database`) and a new hook on the Node ABC
 - Phase: P6
@@ -161,7 +161,7 @@ Entry format:
   can prep data on a canvas" would have been two features that never met. The hook is a default
   no-op, the compiler is untouched (the graph still becomes one CTE query), and every existing node
   ignores it. It is also the seam an API-input node will use.
-- Commit(s): this commit
+- Commit(s): 92a1a95
 
 ## 2026-07-14 — P6: packaged app cannot load user-installed plugins
 - Phase: P6
@@ -176,7 +176,7 @@ Entry format:
   greps the packaged binary's `connectors` output so this cannot regress unnoticed. (2) A drop-in
   plugin *folder* (scanning a user directory at startup) would give the frozen app real
   extensibility; it is not built, and is the obvious next step for the plugin story.
-- Commit(s): this commit
+- Commit(s): 92a1a95
 
 ## 2026-07-14 — P6: no code signing / notarization; no installers
 - Phase: P6
@@ -189,7 +189,7 @@ Entry format:
   plainly so the Windows testers are not surprised: SmartScreen will warn on first launch, and macOS
   Gatekeeper will refuse a downloaded .app until it is opened via right-click ▸ Open. That is a real
   cost of shipping unsigned, not a bug.
-- Commit(s): this commit
+- Commit(s): 92a1a95
 
 ## 2026-07-14 — P6: Muse Spark LLM provider added (not in the plan)
 - Phase: P6
@@ -202,7 +202,7 @@ Entry format:
   silent fallback would send the user's data to a vendor they never named. `verified = False` like
   the rest: the request shape is tested against a scripted OpenAI-standard server, but no live Muse
   Spark endpoint has been called from this build.
-- Commit(s): this commit
+- Commit(s): 92a1a95
 
 ## 2026-07-14 — P5: no Playwright/JS-rendering extra; no LLM-assisted extraction
 - Phase: P5
