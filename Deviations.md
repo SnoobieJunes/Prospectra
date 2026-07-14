@@ -86,6 +86,56 @@ Entry format:
   a chart-only addition when it lands.
 - Commit(s): this commit
 
+## 2026-07-14 — P4: no provider was run against a live API; all four ship "experimental"
+- Phase: P4
+- Deviation: the plan's acceptance line ("'Why might temperature correlate with sales?' returns a
+  grounded, cited answer") has NOT been demonstrated against a real model. There is no API key in
+  this environment, so every provider carries `verified = False` and the UI badges it
+  "experimental: the request format is implemented but has not been run against this provider's
+  live API in this build".
+- Why: no credentials. What *is* proven, against a scripted provider: the tool loop, the privacy
+  gate (sentinel test), the SQL sandbox (attack tests), the audit log, keychain storage, and the
+  hypothesis engine's prompt and citation handling. What is unproven is only the wire format of
+  each vendor's API. Flipping a provider to `verified = True` requires making a real call and
+  observing it — nothing else counts.
+- Commit(s): this commit
+
+## 2026-07-14 — P4: web search is Anthropic-only; no Tavily/Brave backend
+- Phase: P4
+- Deviation: the plan specified "web search (Anthropic server-side `web_search` tool when
+  provider=Anthropic; pluggable Tavily/Brave key otherwise)". Only the Anthropic server-side tool
+  is implemented. With any other provider the hypothesis engine still answers, but says plainly
+  that nothing is cited and that the content is the model's prior knowledge rather than evidence.
+- Why: a second search backend needs its own key to test, and shipping an untested search path
+  that silently returns nothing would be worse than saying so. `Provider.supports_web_search` is
+  the seam a Tavily/Brave backend plugs into.
+- Commit(s): this commit
+
+## 2026-07-14 — P4: privacy levels gate *which tools exist*, and the middle level uses a
+## structured aggregate tool instead of free-form SQL
+- Phase: P4
+- Deviation: the plan described the model getting `run_sql` (read-only, enforced LIMIT) as a
+  general tool. Instead `run_sql` exists **only** at the highest sharing level; the default level
+  exposes a structured `aggregate` tool (the model names group-by columns and picks metrics from a
+  fixed list; this code builds the SQL).
+- Why: it makes the guarantee provable rather than promised. With free-form SQL there is no way to
+  be certain a query cannot return an individual row; with a structured aggregate tool there is no
+  query shape that can. The tools a level does not permit are not merely refused — they are absent
+  from the request, so no prompt can talk the model into them. Additionally, `run_sql` runs inside
+  a separate DuckDB with `enable_external_access=false` and a locked configuration, because a
+  plain "SELECT-only" check is not a security boundary (`SELECT * FROM read_csv('/etc/passwd')` is
+  a SELECT).
+- Commit(s): this commit
+
+## 2026-07-14 — P4: no drag-in context chips in the chat dock
+- Phase: P4
+- Deviation: the plan said "any column/finding can be dragged in as a context chip". Not built —
+  the buddy sees all opened datasets, and the Analyze tab hands it the current findings
+  automatically.
+- Why: it depends on the drag-and-drop MIME backbone, which is P5's job. Deferred there rather
+  than half-built here.
+- Commit(s): this commit
+
 ## 2026-07-13 — Linux GUI launch runs under Xvfb, not the bare runner
 - Phase: P2
 - Deviation: CI's GUI-launch step uses the native platform plugin on Windows/macOS but `xvfb-run`

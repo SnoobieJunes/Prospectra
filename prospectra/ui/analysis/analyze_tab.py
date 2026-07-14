@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 
 from prospectra.core.catalog import Catalog
 from prospectra.core.mining import Finding, ScanResult, scan_relation
+from prospectra.ui.analysis.explain_panel import ExplainPanel
 from prospectra.ui.analysis.trust_light import TrustLight
 from prospectra.ui.widgets.charts import Chart
 from prospectra.ui.workers import run_in_pool
@@ -55,6 +56,9 @@ def _size_columns(table: QTableWidget) -> None:
 
 
 class AnalyzeTab(QWidget):
+    # 2026-07-14 (P4): emitted after every scan so the Data Buddy dock can discuss the findings.
+    scan_finished = Signal(list)
+
     def __init__(self, catalog: Catalog) -> None:
         super().__init__()
         self._catalog = catalog
@@ -116,6 +120,9 @@ class AnalyzeTab(QWidget):
         layout.addWidget(self._headline)
         self._pair_chart = Chart(height=3.0)
         layout.addWidget(self._pair_chart, 1)
+        # 2026-07-14 (P4): ask the LLM why this relationship might exist, with cited sources.
+        self._explain = ExplainPanel()
+        layout.addWidget(self._explain, 1)
         page.addWidget(detail)
         page.setSizes([620, 560])
         return page
@@ -250,6 +257,7 @@ class AnalyzeTab(QWidget):
         self._fill_findings(scan)
         self._fill_drivers(scan)
         self._fill_pca(scan)
+        self.scan_finished.emit(list(scan.findings))
 
     # -- population --------------------------------------------------------------------------
 
@@ -286,6 +294,7 @@ class AnalyzeTab(QWidget):
         finding = pairs[row]
         self._headline.setText(finding.headline + "\n\nAssociation, not proof of cause.")
         self._plot_finding(finding)
+        self._explain.set_finding(finding, self._scan.dataset)
 
     def _plot_finding(self, finding: Finding) -> None:
         frame = self._scan.frame if self._scan else None

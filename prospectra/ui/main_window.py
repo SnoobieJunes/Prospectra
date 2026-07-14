@@ -1,3 +1,6 @@
+# 2026-07-14 (P4): Data Buddy dock wired in — it owns its own query sandbox, follows the catalog,
+# and receives each scan's findings so it can discuss them. Settings (provider, key, privacy) live
+# behind File ▸ Data Buddy Settings.
 # 2026-07-13 (P3): Analyze workspace wired in — its dataset list follows the catalog, and
 # findings can be saved into the open project (with their sample seed, so they reproduce).
 # 2026-07-13 (P2): Flow workspace wired in — Save/Open Flow persist the canvas graph into the
@@ -58,8 +61,9 @@ class MainWindow(QMainWindow):
 
         self._sources = SourcesDock()
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self._sources)
-        self._buddy = BuddyDock()
+        self._buddy = BuddyDock(self.catalog)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._buddy)
+        self._analyze_tab.scan_finished.connect(self._buddy.set_findings)
         self._log = LogDock()
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self._log)
         # 2026-07-13 (P2): give the workspace the room — with default sizing the docks squeezed
@@ -108,6 +112,10 @@ class MainWindow(QMainWindow):
         save_findings = QAction("Save F&indings to Project", self)
         save_findings.triggered.connect(self._save_findings)
         file_menu.addAction(save_findings)
+        file_menu.addSeparator()
+        buddy_settings = QAction("Data &Buddy Settings…", self)
+        buddy_settings.triggered.connect(self._buddy.open_settings)
+        file_menu.addAction(buddy_settings)
         file_menu.addSeparator()
         quit_action = QAction("&Quit", self)
         quit_action.setShortcut("Ctrl+Q")
@@ -285,5 +293,6 @@ class MainWindow(QMainWindow):
         if self._store is not None:
             self._store.close()
             self._store = None
+        self._buddy.shutdown()  # closes the assistant's query sandbox
         self.catalog.close()
         super().closeEvent(event)

@@ -36,8 +36,10 @@ Repo: https://github.com/SnoobieJunes/Prospectra
 - P2 (flow engine + node set + canvas UI + headless `run-flow` + cross-OS CI) — done 2026-07-13.
 - P3 (mining engine: pair tests + BH-FDR, regression ladder, multivariate model, ANOVA, PCA,
   diagnostics, Analyze workspace, headless `scan`) — done 2026-07-13.
-- Next: P4 — LLM data buddy + hypothesis engine (4 providers, keyring, privacy gates, web-cited
-  explanations for findings).
+- P4 (data buddy: 4 providers, keychain, privacy gate, sandboxed SQL tools, chat dock, hypothesis
+  engine with cited sources) — done 2026-07-14. **No provider has been run against a live API —
+  all four are badged "experimental" until one is.**
+- Next: P5 — scraper, dashboards, drag-and-drop backbone.
 
 ### Statistical rules (do not regress these)
 - **Never rank R² across different response transforms.** A log-y model's R² describes ln(y), not
@@ -50,6 +52,24 @@ Repo: https://github.com/SnoobieJunes/Prospectra
 - **Findings are associational, never causal.** No "causes"/"drives"/"because" in headlines — a
   test in `tests/test_mining.py` enforces this.
 - PCA is unsupervised and cannot answer "what drives X"; the narrative and UI say so explicitly.
+
+### Data-buddy rules (do not regress these)
+- **The privacy level decides which tools exist**, not just which are refused. A tool a level does
+  not permit is absent from the request (`core/llm/privacy.py` → `ALLOWED_TOOLS`), so no prompt can
+  talk the model into it. Default is AGGREGATES: summaries and findings, never rows.
+- **Every outbound payload goes through `AuditLog.record` before the call leaves the process.**
+  That is what makes the privacy claim testable — `tests/test_llm_privacy.py` plants a sentinel
+  value and asserts it never appears in anything sent. Any new provider must record its payload.
+- **The model's SQL runs in `core/llm/sandbox.py`, never on the main catalog connection.** It is a
+  separate DuckDB with `enable_external_access=false` and a locked config, holding only the copied
+  datasets. "SELECT-only" alone is NOT a boundary — `SELECT * FROM read_csv('/etc/passwd')` is a
+  SELECT.
+- **API keys go to the OS keychain via `core/llm/secrets.py`.** Never QSettings, never the project
+  file, never a dotfile.
+- A provider is `verified = True` only after a real call to its API was made and observed. Anything
+  else is `False` and the UI says "experimental".
+- Tests must never touch real user preferences: patch `settings_store._APP` to a unique name (a
+  broken fixture once wrote a test's privacy level into the developer's real QSettings).
 
 ### Commands
 - `uv sync` — install (uv provisions Python 3.12 per `.python-version`; system python is 3.9)
