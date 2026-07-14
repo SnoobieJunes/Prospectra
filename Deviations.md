@@ -40,4 +40,34 @@ Entry format:
   import LooseVersion`; distutils was removed from the stdlib), so the flow canvas is a custom
   QGraphicsScene editor owned by this repo.
 - Why: a canvas dependency that cannot import on any supported interpreter is not adoptable.
-- Commit(s): this commit
+- Commit(s): eee92ab
+
+## 2026-07-13 — P2 built before the rest of P1's UI polish; scope trimmed to ship the canvas
+- Phase: P2
+- Deviation: the P2 node list in the plan is delivered in full, but three canvas conveniences the
+  plan implies are not in this commit: dragging catalog datasets onto the canvas as inputs (flow
+  inputs are file paths for now), an undo stack, and a visual column picker (params take comma
+  lists / SQL expressions). Excel and database sources cannot yet feed a flow — only files DuckDB
+  reads natively (CSV/TSV/text/JSON/Parquet).
+- Why: the user asked for P1+P2 in one pass; these are additive UX layers over a working engine
+  and none of them change the flow model, so they slot into P5 (drag-and-drop backbone) without
+  rework. Called out explicitly so nobody assumes they exist.
+- Commit(s): eee92ab
+
+## 2026-07-13 — Python pinned to 3.12 (plan said "3.12 (floor 3.11)")
+- Phase: P2
+- Deviation: added `.python-version` pinning 3.12 exactly; `requires-python` still allows ≥3.11.
+- Why: uv was resolving to 3.14 locally, so the maintainer's machine, CI, and the Windows testers
+  could each run a different interpreter — the exact class of difference that makes "works on my
+  machine" claims worthless. One pinned version across all three OSes.
+- Commit(s): eee92ab
+
+## 2026-07-13 — Linux GUI launch runs under Xvfb, not the bare runner
+- Phase: P2
+- Deviation: CI's GUI-launch step uses the native platform plugin on Windows/macOS but `xvfb-run`
+  on Linux.
+- Why: proven by the first CI run — the Linux runner has no X display (`qt.qpa.xcb: could not
+  connect to display`), while Windows and macOS runners do. Xvfb supplies a real X display, which
+  is a stronger check than falling back to the offscreen plugin. Windows and macOS passed the
+  native-plugin launch on run #1.
+- Commit(s): (this commit)

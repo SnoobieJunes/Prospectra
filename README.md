@@ -6,26 +6,57 @@ relationships (correlation scans with FDR correction, regressions ranked by R² 
 ANOVA, PCA), visualizes findings on dashboards, and uses LLMs plus web search to hypothesize —
 with cited sources — *why* those relationships might exist.
 
-**Status: pre-alpha (P0 — skeleton).** The app shell, project file format, headless CLI, and the
-synthetic tutorial dataset exist. Connectors, the flow canvas, and the mining engine arrive in
-phases P1–P3 (see the build plan referenced in `CLAUDE.md`).
+**Status: pre-alpha (P2 done).** Working today: data connectors (CSV/TSV/text, JSON, Parquet,
+Excel, and any SQL database by SQLAlchemy URL), a virtualized data grid with a column profiler,
+and the **prep flow canvas** — a Tableau-Prep-style node editor with 12 prep steps that compiles a
+whole pipeline into a single DuckDB query. The mining engine (regressions, ANOVA, PCA) is P3; the
+LLM data buddy is P4. Anything not built yet says so in the UI rather than pretending.
 
 ## Quickstart
 
-Requires [uv](https://docs.astral.sh/uv/) (it provisions Python ≥ 3.11 automatically):
+Requires [uv](https://docs.astral.sh/uv/) — it provisions the right Python (3.12) automatically,
+so you do **not** need Python preinstalled.
 
-```sh
-uv sync                 # install
-uv run prospectra       # launch the GUI
-uv run pytest           # run tests
+### Windows
+
+```powershell
+winget install --id=astral-sh.uv -e     # or: irm https://astral.sh/uv/install.ps1 | iex
+git clone https://github.com/SnoobieJunes/Prospectra.git
+cd Prospectra
+uv sync                                  # install
+uv run prospectra                        # launch the GUI
 ```
 
-Headless CLI (the whole engine will always be drivable without a display):
+### macOS / Linux
 
 ```sh
-uv run prospectra generate-example   # regenerate examples/ice_cream_sales.csv (seeded)
-uv run prospectra scan <file> --target <column>   # arrives in P3
-uv run prospectra run-flow <project> <flow>       # arrives in P2
+curl -LsSf https://astral.sh/uv/install.sh | sh
+git clone https://github.com/SnoobieJunes/Prospectra.git && cd Prospectra
+uv sync && uv run prospectra
+```
+
+Every commit is tested on Windows, Linux, and macOS in CI — the suite plus a real GUI launch on
+each OS (see `.github/workflows/ci.yml`).
+
+## Try the flow canvas in 60 seconds
+
+1. `uv run prospectra generate-example` writes `examples/ice_cream_sales.csv` (a seeded synthetic
+   dataset whose drivers are known: sales depend on temperature, school holidays, and ad spend).
+2. Launch the app, go to the **Flow** tab.
+3. Add an **Input: File** node, point it at that CSV; add **Aggregate** with group-by `school_out`
+   and aggregation `avg(ice_cream_sales) AS avg_sales`; drag from the input's right port to the
+   aggregate's left port.
+4. Hit **Preview selected** — the profile cards and data preview below the canvas fill in.
+5. Add an **Output** node, give it a `.csv` path, and hit **Run flow**.
+
+## Headless CLI
+
+The whole engine runs without a display (this is what CI exercises):
+
+```sh
+uv run prospectra generate-example                 # seeded tutorial dataset
+uv run prospectra run-flow <project.prospectra> <flow-name>   # run a saved flow
+uv run prospectra scan <file> --target <column>    # arrives in P3
 ```
 
 ## Architecture in one paragraph

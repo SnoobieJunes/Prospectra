@@ -32,13 +32,23 @@ Repo: https://github.com/SnoobieJunes/Prospectra
 
 ### Status
 - P0 (skeleton: app shell, project store, headless CLI, example dataset, tooling) — done 2026-07-13.
-- Next: P1 — file/SQL connectors, catalog, virtualized data grid, column profiler, sampling.
+- P1 (connectors, catalog, virtualized grid, column profiler, sampling) — done 2026-07-13.
+- P2 (flow engine + node set + canvas UI + headless `run-flow` + cross-OS CI) — done 2026-07-13.
+- Next: P3 — mining engine (correlation scan + BH-FDR, regression ladder, ANOVA, PCA, findings).
 
 ### Commands
-- `uv sync` — install (uv provisions Python ≥3.11 automatically; system python is 3.9)
+- `uv sync` — install (uv provisions Python 3.12 per `.python-version`; system python is 3.9)
 - `uv run prospectra` — launch GUI (`--smoke` auto-quits after ~2.5 s, used for launch checks)
 - `uv run prospectra generate-example` — regenerate `examples/ice_cream_sales.csv`
+- `uv run prospectra run-flow <project> <flow>` — run a saved flow headless
 - `uv run pytest` · `uv run ruff check .` · `uv run mypy prospectra` · `uv run lint-imports`
+
+### Cross-OS rule (non-negotiable)
+The testers run **Windows only**; the maintainer develops on macOS. Never claim Windows works from
+a macOS run — CI (`.github/workflows/ci.yml`) runs the suite **and a real GUI launch** on
+windows/ubuntu/macos, and that is the only acceptable evidence. Windows gotchas already handled:
+build SQL paths through `prospectra.core.sqlutil.path_lit` (POSIX separators; never interpolate a
+raw `str(Path)` with backslashes into SQL), and write CSVs with `newline=""`.
 
 ### Architecture rules
 - `prospectra/core/` is the headless engine: it must NEVER import Qt or `prospectra.ui`.
