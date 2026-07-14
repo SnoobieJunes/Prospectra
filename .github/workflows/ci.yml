@@ -1,0 +1,66 @@
+# 2026-07-13 (P2): CI across all three supported OSes. Why Windows is first in the matrix: the
+# project's testers run Windows only, and the maintainer develops on macOS — so "it launches on
+# Windows" must be proven by a real Windows run, not inferred. The `gui-launch` step starts the
+# actual app with its native platform plugin (no offscreen override) and asserts a clean exit;
+# `pytest` runs offscreen (tests/conftest.py) so it is deterministic everywhere.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # PySide6 needs these even for the offscreen platform plugin.
+      - name: Install Qt system libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libxkbcommon-x11-0 libdbus-1-3 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xkb1
+
+      - name: Install project
+        run: uv sync --frozen
+
+      - name: Lint (ruff)
+        run: uv run ruff check .
+
+      - name: Types (mypy, strict in core)
+        run: uv run mypy prospectra
+
+      - name: Architecture contract (core stays Qt-free)
+        run: uv run lint-imports
+
+      - name: Tests
+        run: uv run pytest -q
+
+      # The headless engine must work with no display at all.
+      - name: Headless engine (CLI)
+        run: uv run prospectra generate-example
+
+      # The real proof for Windows testers: launch the actual GUI with the native platform
+      # plugin. --smoke opens the main window, then auto-quits after ~2.5s with exit code 0.
+      - name: GUI launch (native platform)
+        run: uv run prospectra --smoke

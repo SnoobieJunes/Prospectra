@@ -1,3 +1,5 @@
+# 2026-07-13 (P2): Flow workspace wired in — Save/Open Flow persist the canvas graph into the
+# open .prospectra project (flows are versioned JSON docs in the project store).
 # 2026-07-13 (P1): Main window now owns the Catalog session and wires the Sources dock to real
 # work — open data files (CSV/Excel/JSON/Parquet), add databases by SQLAlchemy URL, browse tables,
 # and land everything in the Data workspace (virtualized grid + profile cards).
@@ -10,17 +12,19 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QCloseEvent
-from PySide6.QtWidgets import QFileDialog, QMainWindow, QMessageBox
+from PySide6.QtWidgets import QFileDialog, QInputDialog, QMainWindow, QMessageBox
 
 from prospectra import __version__
 from prospectra.core.catalog import Catalog, Dataset, SqlConnection
 from prospectra.core.connectors import SUPPORTED_FILE_SUFFIXES
+from prospectra.core.flow import FlowError, FlowGraph
 from prospectra.core.project import ProjectStore, ProjectStoreError
 from prospectra.ui.data.data_tab import DataTab
 from prospectra.ui.dialogs.add_database import AddDatabaseDialog
 from prospectra.ui.docks.buddy import BuddyDock
 from prospectra.ui.docks.log_view import LogDock, QtLogHandler
 from prospectra.ui.docks.sources import SourcesDock
+from prospectra.ui.flow.flow_tab import FlowTab
 from prospectra.ui.tabs import make_central
 from prospectra.ui.workers import run_in_pool
 
@@ -41,7 +45,8 @@ class MainWindow(QMainWindow):
         self.catalog = Catalog()
 
         self._data_tab = DataTab(self.catalog)
-        self._tabs = make_central({"Data": self._data_tab})
+        self._flow_tab = FlowTab()
+        self._tabs = make_central({"Data": self._data_tab, "Flow": self._flow_tab})
         self.setCentralWidget(self._tabs)
 
         self._sources = SourcesDock()
@@ -50,6 +55,11 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self._buddy)
         self._log = LogDock()
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self._log)
+        # 2026-07-13 (P2): give the workspace the room — with default sizing the docks squeezed
+        # the flow canvas into a strip (seen in a real-display screenshot). These are initial
+        # sizes only; the user can still drag any splitter.
+        self.resizeDocks([self._sources, self._buddy], [230, 280], Qt.Orientation.Horizontal)
+        self.resizeDocks([self._log], [140], Qt.Orientation.Vertical)
 
         self._sources.open_file_requested.connect(self._open_data_file)
         self._sources.add_database_requested.connect(self._add_database)
@@ -80,6 +90,14 @@ class MainWindow(QMainWindow):
         open_action.setShortcut("Ctrl+O")
         open_action.triggered.connect(self._open_project)
         file_menu.addAction(open_action)
+        file_menu.addSeparator()
+        save_flow = QAction("&Save Flow to Project…", self)
+        save_flow.setShortcut("Ctrl+S")
+        save_flow.triggered.connect(self._save_flow)
+        file_menu.addAction(save_flow)
+        load_flow = QAction("Open &Flow from Project…", self)
+        load_flow.triggered.connect(self._load_flow)
+        file_menu.addAction(load_flow)
         file_menu.addSeparator()
         quit_action = QAction("&Quit", self)
         quit_action.setShortcut("Ctrl+Q")
@@ -180,6 +198,43 @@ class MainWindow(QMainWindow):
             self._attach(ProjectStore.open(Path(filename)))
         except ProjectStoreError as exc:
             QMessageBox.warning(self, "Could not open project", str(exc))
+
+    # -- flows -----------------------------------------------------------------------
+
+    def _save_flow(self) -> None:
+        if self._store is None:
+            QMessageBox.information(
+                self, "No project open", "Create or open a project first (File ▸ New Project…)."
+            )
+            return
+        name, ok = QInputDialog.getText(self, "Save flow", "Flow name:")
+        if not ok or not name.strip():
+            return
+        record = self._store.save_flow(name.strip(), self._flow_tab.graph.to_doc())
+        self.statusBar().showMessage(f"Saved flow '{record.name}' to {self._store.path.name}")
+        logger.info("Saved flow %s (%s)", record.name, record.id)
+
+    def _load_flow(self) -> None:
+        if self._store is None:
+            QMessageBox.information(self, "No project open", "Open a project first.")
+            return
+        flows = self._store.list_flows()
+        if not flows:
+            QMessageBox.information(self, "No flows", "This project has no saved flows yet.")
+            return
+        names = [f"{f.name}  ({f.updated_at})" for f in flows]
+        choice, ok = QInputDialog.getItem(self, "Open flow", "Flow:", names, 0, False)
+        if not ok:
+            return
+        record = flows[names.index(choice)]
+        try:
+            graph = FlowGraph.from_doc(record.doc)
+        except FlowError as exc:
+            QMessageBox.warning(self, "Could not open flow", str(exc))
+            return
+        self._flow_tab.load_graph(graph)
+        self._tabs.setCurrentWidget(self._flow_tab)
+        self.statusBar().showMessage(f"Opened flow '{record.name}'")
 
     def _attach(self, store: ProjectStore) -> None:
         if self._store is not None:

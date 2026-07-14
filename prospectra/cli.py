@@ -1,7 +1,8 @@
+# 2026-07-13 (P2): `run-flow` is now real — opens a project, loads a flow by name or id, and
+# executes its Output nodes headless (the P2 acceptance path and the CI workhorse).
 # 2026-07-13 (P0): Entry point — GUI by default, headless subcommands for CI and power users.
 # Why: the build plan requires the whole engine to be drivable without a display; the GUI import
-# is deferred so headless commands never touch Qt. `scan` and `run-flow` are honest stubs (exit 2)
-# until their phases (P3 / P2) land — they must not pretend to work.
+# is deferred so headless commands never touch Qt. `scan` stays an honest stub (exit 2) until P3.
 
 from __future__ import annotations
 
@@ -27,9 +28,7 @@ def main(argv: list[str] | None = None) -> int:
     scan.add_argument("path", help="Dataset file to scan")
     scan.add_argument("--target", help="Target column to explain (e.g. sales)")
 
-    run_flow = sub.add_parser(
-        "run-flow", help="Run a saved prep flow headless (arrives in phase P2)"
-    )
+    run_flow = sub.add_parser("run-flow", help="Run a saved prep flow headless")
     run_flow.add_argument("project", help="Path to a .prospectra project file")
     run_flow.add_argument("flow", help="Flow name or id")
 
@@ -49,11 +48,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
     if args.command == "run-flow":
-        print(
-            "prospectra run-flow: not implemented yet — the flow engine lands in phase P2.",
-            file=sys.stderr,
-        )
-        return 2
+        return _run_flow(args.project, args.flow)
     if args.command == "generate-example":
         from prospectra.example_data import write_csv
 
@@ -64,6 +59,38 @@ def main(argv: list[str] | None = None) -> int:
     from prospectra.app import run_gui  # deferred: keeps headless use Qt-free
 
     return run_gui(smoke=args.smoke)
+
+
+def _run_flow(project_path: str, flow_ref: str) -> int:
+    from prospectra.core.flow import FlowError, FlowGraph, FlowRunner
+    from prospectra.core.project import ProjectStore, ProjectStoreError
+
+    try:
+        store = ProjectStore.open(project_path)
+    except ProjectStoreError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    try:
+        flows = store.list_flows()
+        matches = [f for f in flows if flow_ref in (f.id, f.name)]
+        if not matches:
+            names = ", ".join(f.name for f in flows) or "(none)"
+            print(f"error: no flow {flow_ref!r} in project. Flows: {names}", file=sys.stderr)
+            return 1
+        try:
+            graph = FlowGraph.from_doc(matches[0].doc)
+            results = FlowRunner().run(graph)
+        except FlowError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        if not results:
+            print("error: flow has no Output nodes — nothing to run", file=sys.stderr)
+            return 1
+        for result in results:
+            print(f"wrote {result.path} ({result.rows} rows)")
+        return 0
+    finally:
+        store.close()
 
 
 if __name__ == "__main__":
