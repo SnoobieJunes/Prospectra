@@ -6,7 +6,7 @@ relationships (correlation scans with FDR correction, regressions ranked by R² 
 ANOVA, PCA), visualizes findings on dashboards, and uses LLMs plus web search to hypothesize —
 with cited sources — *why* those relationships might exist.
 
-**Status: pre-alpha (P3 done).** Working today:
+**Status: pre-alpha (P5 done).** Working today:
 
 - **Connect** — CSV/TSV/text, JSON, Parquet, Excel, and any SQL database by SQLAlchemy URL.
 - **Prep** — a Tableau-Prep-style flow canvas with 12 node types that compiles an entire pipeline
@@ -20,9 +20,17 @@ with cited sources — *why* those relationships might exist.
 
 - **Ask** — a data buddy you can chat with (Anthropic, OpenAI, Gemini, or a local Ollama model),
   and a "why might this be?" button on every finding that answers with cited sources.
+- **Scrape** — pull the tables off a web page into CSVs that feed everything above. It obeys
+  robots.txt (checked *before* the request; a disallow is a refusal, not an obstacle) and
+  rate-limits itself per host.
+- **Chart** — build a chart by dragging columns onto X / Y / Colour shelves, and pin it to a
+  dashboard that saves into your project. Charts state their own caveats: a top-10 bar chart says
+  it is showing 10 of 194, and a log scale that cannot draw your zeros says how many it dropped.
+- **Drag anything anywhere** — a column from the grid onto a chart shelf, into the chat as context,
+  or onto "New dataset" (which derives the dataset *and* writes the flow that rebuilds it); a
+  dataset onto the flow canvas to become an Input node; a finding into the chat to ask about it.
 
-Dashboards and the web scraper are P5. Anything not built yet says so in the UI rather than
-pretending.
+Anything not built yet says so in the UI rather than pretending.
 
 > **The four LLM providers are badged "experimental."** Their request formats are implemented and
 > the whole pipeline around them is tested, but no provider has been run against its live API in
@@ -99,12 +107,28 @@ The whole engine runs without a display (this is what CI exercises):
 uv run prospectra generate-example                 # seeded tutorial dataset
 uv run prospectra run-flow <project.prospectra> <flow-name>   # run a saved flow
 uv run prospectra scan examples/ice_cream_sales.csv --target ice_cream_sales --pca
+uv run prospectra scrape <url> --out scraped/          # a page's tables -> CSVs
 ```
 
 That last command mines the tutorial dataset, whose answer is known by construction: sales were
 generated from temperature, school holidays, and ad spend, plus two decoy columns of pure noise.
 The scan ranks the three real drivers at the top, rejects both decoys via FDR control, and
 recovers the planted equation in its combined model (adjusted R² = 0.90).
+
+## The whole pipeline, on real data
+
+This ran against live Wikipedia, end to end:
+
+```sh
+uv run prospectra scrape "https://en.wikipedia.org/wiki/List_of_countries_by_GDP_(nominal)" --out scraped/
+```
+
+It obeys robots.txt, skips the page furniture (its map *legend* is not a dataset), and writes each
+real table as a named CSV. The GDP table's cells are messy the way real data is — `—N/a`,
+`98,964 (2024)`, `China[n 1]` — so the numbers arrive as text. **The scraper does not guess at
+them**: cleaning is the flow's job. A seven-node flow (TRY_CAST the numbers, strip the footnotes,
+drop the aggregate "World" row) turns it into 194 clean rows, which the miner then scans and which
+a bar chart then ranks on a dashboard saved in the project file.
 
 ## A word on what this tool will and won't tell you
 

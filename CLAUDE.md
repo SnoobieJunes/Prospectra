@@ -39,7 +39,38 @@ Repo: https://github.com/SnoobieJunes/Prospectra
 - P4 (data buddy: 4 providers, keychain, privacy gate, sandboxed SQL tools, chat dock, hypothesis
   engine with cited sources) — done 2026-07-14. **No provider has been run against a live API —
   all four are badged "experimental" until one is.**
-- Next: P5 — scraper, dashboards, drag-and-drop backbone.
+- P5 (scraper + `scrape` CLI, ChartSpec dashboards, drag-and-drop backbone) — done 2026-07-14.
+  Proven end to end against **live Wikipedia**: scraped the GDP table → 7-node prep flow →
+  FDR-controlled finding → chart on a dashboard saved in the project file.
+- Next: P6 — connector breadth (warehouse dialects, ODBC/JDBC, REST + mapping tool), Jira reference
+  plugin, plugin docs, PyInstaller builds for all 3 OSes.
+
+### Scraper rules (do not regress these)
+- **robots.txt is obeyed, and the check happens *before* the request** (`core/scraper/fetcher.py`).
+  A disallow raises `RobotsDisallowed` and nothing is fetched; a redirect's destination is re-checked.
+  A missing robots.txt means allowed (that is what the standard says), but a refusal is never
+  worked around. Rate limiting is **per host** (1 req/s default), and a site's `Crawl-delay` raises
+  that interval, never lowers it.
+- **Scraped tables are written as ordinary CSVs into the project's staging folder** and opened
+  through the normal file connector. That is the whole design: a scraped table is just a dataset,
+  so it feeds the catalog, flows, and the miner with no special-casing.
+- **The scraper does not coerce types.** Wikipedia ships `—N/a`, `98,964 (2024)` and `China[n 1]`;
+  cleaning those is the *flow's* job (TRY_CAST in a Calculated node), not a silent guess in the
+  parser. Headers are cleaned (footnotes stripped, collisions made unique) because they become SQL
+  identifiers; values are left alone.
+- **Page furniture is not data.** Tables under 2 rows or 2 columns are dropped — a live scrape
+  emitted the page's map *legend* as a dataset until that floor existed.
+
+### Chart rules (do not regress these)
+- **A dual-axis chart is unrepresentable, not merely discouraged**: `ChartSpec` has one `y` and one
+  y-scale. Two measures of different scale = two charts.
+- **Truncation and dropped points are always stated.** A top-N bar chart says "showing the top 10 of
+  194"; a log scale that cannot show zero/negative rows counts them and says so. The note is drawn
+  as the figure's `supxlabel`, so an exported PNG carries its caveats with it.
+- **Colour follows the entity, never its rank** — hues come from the validated categorical order in
+  `ui/widgets/spec_chart.py`, keyed by series name; the 9th series folds into "Other" rather than
+  inventing a hue. One series gets the sequential blue and no legend (the title names it).
+- Before touching any chart code: load the `dataviz` skill.
 
 ### Statistical rules (do not regress these)
 - **Never rank R² across different response transforms.** A log-y model's R² describes ln(y), not
@@ -76,6 +107,8 @@ Repo: https://github.com/SnoobieJunes/Prospectra
 - `uv run prospectra` — launch GUI (`--smoke` auto-quits after ~2.5 s, used for launch checks)
 - `uv run prospectra generate-example` — regenerate `examples/ice_cream_sales.csv`
 - `uv run prospectra run-flow <project> <flow>` — run a saved flow headless
+- `uv run prospectra scrape <url> --out <dir>` — scrape a page's tables to CSV (robots.txt obeyed;
+  accepts a local .html path or `file://`, which is how CI exercises it without a network)
 - `uv run pytest` · `uv run ruff check .` · `uv run mypy prospectra` · `uv run lint-imports`
 
 ### Cross-OS rule (non-negotiable)

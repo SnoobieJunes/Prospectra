@@ -1,3 +1,6 @@
+# 2026-07-14 (P5): Context chips — drag a column, dataset, or finding onto the strip above the
+# input and the next question carries it. A chip names *what to look at*; it never carries values,
+# and it never widens the privacy level — the gate upstream still decides what the model can see.
 # 2026-07-14 (P4): The Data Buddy chat dock — now real.
 # 2026-07-13 (P0): original placeholder.
 #
@@ -36,6 +39,7 @@ from prospectra.core.llm import secrets as secret_store
 from prospectra.core.llm.sandbox import QuerySandbox
 from prospectra.core.mining import Finding
 from prospectra.ui.dialogs.settings import BuddySettingsDialog
+from prospectra.ui.docks.context_chips import ChipBar
 from prospectra.ui.settings_store import load as load_settings
 from prospectra.ui.workers import run_in_pool
 
@@ -74,6 +78,9 @@ class BuddyDock(QDockWidget):
         self._transcript = QTextBrowser()
         self._transcript.setOpenExternalLinks(True)
         layout.addWidget(self._transcript, 1)
+
+        self.chips = ChipBar()
+        layout.addWidget(self.chips)
 
         row = QHBoxLayout()
         self._input = QLineEdit()
@@ -145,16 +152,24 @@ class BuddyDock(QDockWidget):
 
     # -- conversation ---------------------------------------------------------------------------
 
+    def compose(self, question: str) -> str:
+        """The question as the model receives it: the chips' context, then what was typed."""
+        return f"{self.chips.preamble()}{question}"
+
     def _send(self) -> None:
         question = self._input.text().strip()
         if not question:
             return
         self._input.clear()
+        chips = [chip.context for chip in self.chips.chips]
+        if chips:
+            self._say("system", "Context: " + "; ".join(chips))
         self._say("you", question)
         self._set_busy(True)
+        prompt = self.compose(question)
 
         def ask() -> BuddyReply:
-            return self._ensure_session().ask(question)
+            return self._ensure_session().ask(prompt)
 
         run_in_pool(
             ask,

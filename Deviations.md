@@ -136,6 +136,52 @@ Entry format:
   than half-built here.
 - Commit(s): this commit
 
+## 2026-07-14 — P5: no Playwright/JS-rendering extra; no LLM-assisted extraction
+- Phase: P5
+- Deviation: the plan listed an optional `[scraper-js]` Playwright extra for JS-rendered pages, and
+  "LLM-assisted extraction for messy pages". Neither is built. The scraper fetches with httpx and
+  parses server-rendered HTML only; a page whose tables are drawn by JavaScript yields nothing.
+- Why: Playwright pulls a browser download per OS — a heavy, cross-platform-fragile dependency for
+  a case nothing downstream needs (Wikipedia, statistical agencies, and most reference tables are
+  server-rendered). LLM-assisted extraction would route page content to a provider, and no provider
+  has been run against a live API yet (see the P4 entry) — building an unverified extraction path on
+  top of an unverified provider path would produce a feature nobody could trust. Both are additive
+  behind the existing `Fetcher` Protocol and `parse` seam, so neither needs rework to land in P6.
+- Commit(s): cf3006e
+
+## 2026-07-14 — P5: dashboards are a fixed 2-column grid, not a free-form canvas
+- Phase: P5
+- Deviation: the plan says "dashboards are saved grids of specs". They are — but the grid is
+  2 columns, filled left-to-right, with no drag-to-reposition or resize of tiles.
+- Why: the tile's *position* is already persisted (`Tile.row`/`Tile.column`), so a free-form layout
+  is a UI affordance over an unchanged model, not a data-model change. The chart layer's real work
+  in P5 was the honesty of what a chart says (truncation notes, log-scale drops, the one-axis rule)
+  and the drop-shelf builder; free layout is polish that can land any time without migration.
+- Commit(s): cf3006e
+
+## 2026-07-14 — P5: PCA biplot still not built (promised here by the P3 deviation)
+- Phase: P5
+- Deviation: the P3 entry below deferred the PCA biplot to P5 ("it belongs with the dashboards work
+  where the chart layer gets its real treatment"). It is still not built.
+- Why: honest accounting rather than a quiet drop. P5's chart budget went to the ChartSpec model,
+  the shelf-driven builder, and the two chart-honesty rules (stated truncation, stated log-scale
+  drops) — those are the things that stop a dashboard from lying. The biplot remains a chart-only
+  addition: `PCAResult.scores` still carries the first two components, and `SpecChart` is now the
+  place it plugs into. Deferred to P6, and it will keep being deferred honestly until it is drawn.
+- Commit(s): cf3006e
+
+## 2026-07-14 — P5: P2's canvas conveniences — one built, two still open
+- Phase: P5
+- Deviation: the P2 entry below deferred three canvas conveniences to P5. Status: **dragging catalog
+  datasets onto the canvas as inputs is now built** (a dataset drop becomes an Input node wired to
+  its file; a dataset a flow cannot read — an Excel sheet, a database table — is refused with the
+  reason instead of dropping a node that fails on run). The **undo stack** and the **visual column
+  picker** are still not built; flow params still take comma lists and SQL expressions.
+- Why: the dataset-drop was the one that the drag-and-drop backbone made nearly free and that the
+  P2 entry named explicitly. Undo and the column picker are editor ergonomics with no bearing on
+  what a flow can express or on any acceptance line; they are not silently dropped, they are here.
+- Commit(s): cf3006e
+
 ## 2026-07-13 — Linux GUI launch runs under Xvfb, not the bare runner
 - Phase: P2
 - Deviation: CI's GUI-launch step uses the native platform plugin on Windows/macOS but `xvfb-run`

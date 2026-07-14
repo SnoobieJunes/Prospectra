@@ -1,3 +1,6 @@
+# 2026-07-14 (P5): `derive_dataset` — the catalog can now hold a dataset built from another one
+# (the "drag columns onto New dataset" path). It keeps its lineage in `origin`, and the UI pairs it
+# with a generated flow so the derivation is editable rather than hidden.
 # 2026-07-13 (P1): The Catalog — one in-memory DuckDB session per app, holding every opened
 # dataset as a view (files) or table (materialized sources), plus registered SQL connections.
 # Why: a single analytical session lets the grid, profiler, and (later) flows and the mining
@@ -17,6 +20,7 @@ import duckdb
 from prospectra.core.connectors.base import ConnectorStatus, DatasetRef
 from prospectra.core.connectors.registry import file_connector_for
 from prospectra.core.connectors.sql_alchemy import SQLAlchemyConnector
+from prospectra.core.sqlutil import ident
 from prospectra.core.stats import TableProfile, profile_relation
 
 logger = logging.getLogger(__name__)
@@ -78,6 +82,32 @@ class Catalog:
             opened.append(ds)
             logger.info("Opened dataset %s from %s", display, p)
         return opened
+
+    # -- derived datasets ----------------------------------------------------------------
+
+    def derive_dataset(self, source_id: str, columns: list[str], name: str) -> Dataset:
+        """A new dataset made of some columns of an existing one (a projection, as a view)."""
+        if not columns:
+            raise ValueError("Pick at least one column")
+        source = self.datasets[source_id]
+        available = {col for col, _dtype in self.describe(source_id)}
+        missing = [c for c in columns if c not in available]
+        if missing:
+            raise ValueError(f"{source.name} has no column(s): {', '.join(missing)}")
+        view = self._next_view()
+        projection = ", ".join(ident(c) for c in columns)
+        self.cursor().execute(
+            f"CREATE OR REPLACE VIEW {view} AS SELECT {projection} FROM {source.view_name}"
+        )
+        ds = Dataset(
+            id=uuid.uuid4().hex,
+            name=name,
+            view_name=view,
+            origin=f"derived from {source.name}: {', '.join(columns)}",
+        )
+        self.datasets[ds.id] = ds
+        logger.info("Derived dataset %s from %s (%d columns)", name, source.name, len(columns))
+        return ds
 
     # -- SQL connections ---------------------------------------------------------------
 

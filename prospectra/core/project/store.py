@@ -1,3 +1,5 @@
+# 2026-07-14 (P5): Dashboards (a P0 schema table, unused until now) get real CRUD, and the project
+# gains a staging folder — the place scraped tables land so they become ordinary file datasets.
 # 2026-07-13 (P0): The .prospectra project file — a single SQLite database holding connections
 # (secret *references* only — actual secrets live in the OS keychain via `keyring`, arriving P4),
 # versioned flow documents, findings, and dashboards.
@@ -74,6 +76,15 @@ class FlowRecord:
     name: str
     doc: dict[str, Any]
     version: int
+    created_at: str
+    updated_at: str
+
+
+@dataclass(frozen=True)
+class DashboardRecord:
+    id: str
+    name: str
+    layout: dict[str, Any]
     created_at: str
     updated_at: str
 
@@ -172,6 +183,15 @@ class ProjectStore:
         raw = self.get_meta("schema_version")
         return int(raw) if raw is not None else 0
 
+    # 2026-07-14 (P5): Scraped tables have to live somewhere the user can find, back up, and open
+    # as ordinary files — a sibling folder of the project, not a hidden temp dir that a reboot eats.
+    @property
+    def staging_dir(self) -> Path:
+        """Folder for files this project generated (scraped tables, flow outputs)."""
+        staging = self._path.parent / f"{self._path.stem}_files"
+        staging.mkdir(parents=True, exist_ok=True)
+        return staging
+
     # -- meta ----------------------------------------------------------------------
 
     def set_meta(self, key: str, value: str) -> None:
@@ -208,6 +228,46 @@ class ProjectStore:
     def list_flows(self) -> list[FlowRecord]:
         rows = self._conn.execute("SELECT * FROM flows ORDER BY created_at").fetchall()
         return [_flow_from_row(r) for r in rows]
+
+    # -- dashboards ----------------------------------------------------------------
+    # 2026-07-14 (P5): saved by id, so re-saving an open dashboard updates it in place instead of
+    # littering the project with copies (the flows table's insert-only behaviour is a known wart).
+
+    def save_dashboard(
+        self, name: str, layout: dict[str, Any], dashboard_id: str | None = None
+    ) -> DashboardRecord:
+        now = _now()
+        did = dashboard_id or uuid.uuid4().hex
+        row = self._conn.execute(
+            "SELECT created_at FROM dashboards WHERE id = ?", (did,)
+        ).fetchone()
+        created = str(row["created_at"]) if row else now
+        self._conn.execute(
+            "INSERT INTO dashboards(id, name, layout_json, created_at, updated_at) "
+            "VALUES(?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+            "name = excluded.name, layout_json = excluded.layout_json, "
+            "updated_at = excluded.updated_at",
+            (did, name, json.dumps(layout), created, now),
+        )
+        self._conn.commit()
+        return DashboardRecord(did, name, layout, created, now)
+
+    def list_dashboards(self) -> list[DashboardRecord]:
+        rows = self._conn.execute("SELECT * FROM dashboards ORDER BY created_at").fetchall()
+        return [
+            DashboardRecord(
+                id=str(r["id"]),
+                name=str(r["name"]),
+                layout=json.loads(r["layout_json"]),
+                created_at=str(r["created_at"]),
+                updated_at=str(r["updated_at"]),
+            )
+            for r in rows
+        ]
+
+    def delete_dashboard(self, dashboard_id: str) -> None:
+        self._conn.execute("DELETE FROM dashboards WHERE id = ?", (dashboard_id,))
+        self._conn.commit()
 
     # -- connections ---------------------------------------------------------------
 

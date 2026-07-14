@@ -1,3 +1,6 @@
+# 2026-07-14 (P5): `scrape` — fetch a page (robots.txt obeyed, per-host rate limited), extract its
+# tables, and write them as CSVs that any flow or scan can read. Accepts a local .html path or a
+# file:// URL too, which is how CI exercises the whole scrape path with no network.
 # 2026-07-13 (P3): `scan` is now real — mines a data file for relationships and prints the ranked
 # table headless (the P3 acceptance path; also how CI exercises the whole stats engine).
 # 2026-07-13 (P2): `run-flow` is now real — opens a project, loads a flow by name or id, and
@@ -38,6 +41,16 @@ def main(argv: list[str] | None = None) -> int:
     run_flow.add_argument("project", help="Path to a .prospectra project file")
     run_flow.add_argument("flow", help="Flow name or id")
 
+    scrape = sub.add_parser("scrape", help="Scrape a web page's tables into CSV files")
+    scrape.add_argument("url", help="Page URL (http/https), or a local .html file to re-parse")
+    scrape.add_argument("--out", default="scraped", help="Folder for the CSVs (default: ./scraped)")
+    scrape.add_argument(
+        "--tables-only",
+        action="store_true",
+        help="Fail if the page has no tables (instead of saving its article text)",
+    )
+    scrape.add_argument("--max-tables", type=int, help="Keep only the first N tables")
+
     gen = sub.add_parser(
         "generate-example", help="Write the synthetic ice-cream tutorial dataset (seeded)"
     )
@@ -51,6 +64,8 @@ def main(argv: list[str] | None = None) -> int:
         return _scan(args.path, args.target, args.max_rows, args.seed, args.alpha, args.pca)
     if args.command == "run-flow":
         return _run_flow(args.project, args.flow)
+    if args.command == "scrape":
+        return _scrape(args.url, args.out, args.tables_only, args.max_tables)
     if args.command == "generate-example":
         from prospectra.example_data import write_csv
 
@@ -148,6 +163,27 @@ def _scan(
         return 0
     finally:
         catalog.close()
+
+
+def _scrape(url: str, out: str, tables_only: bool, max_tables: int | None) -> int:
+    from prospectra.core.scraper import RobotsDisallowed, ScraperError, scrape
+
+    try:
+        result = scrape(url, Path(out), tables_only=tables_only, max_tables=max_tables)
+    except RobotsDisallowed as exc:
+        print(f"refused: {exc}", file=sys.stderr)  # obeying robots.txt is not a failure to fix
+        return 1
+    except ScraperError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"\n{result.summary}\n")
+    for emitted in result.files:
+        print(f"  {emitted.path}  ({emitted.rows:,} rows x {emitted.columns} cols)  {emitted.name}")
+    if result.article_path is not None:
+        print(f"  {result.article_path}  {result.article_title}")
+    print("\nOpen any of these with `prospectra scan <file>` or in the app (Sources ▸ Open File…).")
+    return 0
 
 
 def _run_flow(project_path: str, flow_ref: str) -> int:

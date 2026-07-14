@@ -26,6 +26,11 @@ dependencies = [
     "openai>=2.45.0",
     "google-genai>=2.11.0",
     "keyring>=25.7.0",
+    # 2026-07-14 (P5): scraper — httpx fetches, lxml/bs4 parse. pandas.read_html needs a parser
+    # backend (lxml); BeautifulSoup does the article-text extraction and the robots discovery.
+    "httpx>=0.28",
+    "beautifulsoup4>=4.13",
+    "lxml>=5.3",
 ]
 
 [project.urls]
