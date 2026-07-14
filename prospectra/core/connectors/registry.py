@@ -10,6 +10,12 @@ from importlib.metadata import entry_points
 from pathlib import Path
 
 from prospectra.core.connectors.base import Connector
+from prospectra.core.connectors.documents import (
+    PDF_SUFFIXES,
+    STAT_SUFFIXES,
+    PDFTableConnector,
+    StatFileConnector,
+)
 from prospectra.core.connectors.files import (
     _EXCEL_SUFFIXES,
     _READERS,
@@ -19,7 +25,11 @@ from prospectra.core.connectors.files import (
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_FILE_SUFFIXES: tuple[str, ...] = tuple(_READERS) + _EXCEL_SUFFIXES
+# 2026-07-14 (P6): PDF and the statistical formats join the file tier, completing T0 (their
+# libraries are optional extras — the connector says what to install if one is missing).
+SUPPORTED_FILE_SUFFIXES: tuple[str, ...] = (
+    tuple(_READERS) + _EXCEL_SUFFIXES + PDF_SUFFIXES + STAT_SUFFIXES
+)
 
 ENTRY_POINT_GROUP = "prospectra.connectors"
 
@@ -34,6 +44,10 @@ def file_connector_for(path: Path | str) -> Connector:
         return TextFileConnector(path)
     if suffix in _EXCEL_SUFFIXES:
         return ExcelConnector(path)
+    if suffix in PDF_SUFFIXES:
+        return PDFTableConnector(path)
+    if suffix in STAT_SUFFIXES:
+        return StatFileConnector(path)
     raise UnsupportedFileError(
         f"Unsupported file type {suffix!r}. Supported: {', '.join(SUPPORTED_FILE_SUFFIXES)}"
     )

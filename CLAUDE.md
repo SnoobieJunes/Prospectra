@@ -39,7 +39,63 @@ Repo: https://github.com/SnoobieJunes/Prospectra
 - P4 (data buddy: 4 providers, keychain, privacy gate, sandboxed SQL tools, chat dock, hypothesis
   engine with cited sources) — done 2026-07-14. **No provider has been run against a live API —
   all four are badged "experimental" until one is.**
-- Next: P5 — scraper, dashboards, drag-and-drop backbone.
+- P5 (scraper + `scrape` CLI, ChartSpec dashboards, drag-and-drop backbone) — done 2026-07-14.
+  Proven end to end against **live Wikipedia**: scraped the GDP table → 7-node prep flow →
+  FDR-controlled finding → chart on a dashboard saved in the project file.
+- P6 (connector breadth: 12 dialect descriptors, REST/OData mapping tool, JDBC, PDF + SPSS/Stata/SAS,
+  Jira reference plugin, `Input: Database` flow node, PyInstaller packaging) — done 2026-07-14.
+  Proven: SQLite dialect form -> connection -> flow over a **database table** -> headless rerun; the
+  macOS bundle was built and launched. Everything except SQLite is badged experimental.
+- Also P6: **Muse Spark** LLM provider — a user-supplied OpenAI-compatible endpoint (URL + key +
+  model, all three required).
+- All phases P0-P6 delivered. Remaining known gaps are in Deviations.md (JS-rendered scraping,
+  LLM-assisted extraction, PCA biplot, flow undo stack, free-form dashboard layout).
+
+### Connector rules (do not regress these)
+- **A dialect is a descriptor, not a class.** `core/connectors/dialects.py` declares fields, URL
+  template, and driver package; the UI renders the form from it. Adding a warehouse is one entry.
+- **A path is not a credential.** `Field.path_like` decides the quoting: paths keep their separators,
+  everything else is fully escaped. Escaping a SQLite path's slashes made SQLAlchemy *silently create
+  an empty database* and report a good connection — found by running the acceptance path, not a test.
+- **A missing SQLite file is an error**, because SQLite would otherwise create an empty one and the
+  user would see a healthy connection with no tables.
+- **Passwords never reach the project file.** `redact_url()` strips them; the real secret goes to the
+  OS keychain and the connection record holds a `secret_ref`.
+- **Don't reimplement HTTP for a SaaS source** — describe it as a `RestMapping` (auth + pagination +
+  paths->columns). The Jira plugin is the reference: ~60 lines, and it is a real installed
+  distribution loaded through the `prospectra.connectors` entry point.
+- **A paginator must have caps and must confess when it hits one.** An API that always returns a
+  "next" cursor exists; `FetchReport.notes` says "there may be more" rather than implying completeness.
+- **The packaged app needs `copy_metadata` for every bundled plugin.** PyInstaller ships no
+  `.dist-info`, so `entry_points()` finds nothing and plugins silently vanish from a build that
+  otherwise looks perfect. CI asserts the bundled binary still lists the Jira plugin.
+
+### Scraper rules (do not regress these)
+- **robots.txt is obeyed, and the check happens *before* the request** (`core/scraper/fetcher.py`).
+  A disallow raises `RobotsDisallowed` and nothing is fetched; a redirect's destination is re-checked.
+  A missing robots.txt means allowed (that is what the standard says), but a refusal is never
+  worked around. Rate limiting is **per host** (1 req/s default), and a site's `Crawl-delay` raises
+  that interval, never lowers it.
+- **Scraped tables are written as ordinary CSVs into the project's staging folder** and opened
+  through the normal file connector. That is the whole design: a scraped table is just a dataset,
+  so it feeds the catalog, flows, and the miner with no special-casing.
+- **The scraper does not coerce types.** Wikipedia ships `—N/a`, `98,964 (2024)` and `China[n 1]`;
+  cleaning those is the *flow's* job (TRY_CAST in a Calculated node), not a silent guess in the
+  parser. Headers are cleaned (footnotes stripped, collisions made unique) because they become SQL
+  identifiers; values are left alone.
+- **Page furniture is not data.** Tables under 2 rows or 2 columns are dropped — a live scrape
+  emitted the page's map *legend* as a dataset until that floor existed.
+
+### Chart rules (do not regress these)
+- **A dual-axis chart is unrepresentable, not merely discouraged**: `ChartSpec` has one `y` and one
+  y-scale. Two measures of different scale = two charts.
+- **Truncation and dropped points are always stated.** A top-N bar chart says "showing the top 10 of
+  194"; a log scale that cannot show zero/negative rows counts them and says so. The note is drawn
+  as the figure's `supxlabel`, so an exported PNG carries its caveats with it.
+- **Colour follows the entity, never its rank** — hues come from the validated categorical order in
+  `ui/widgets/spec_chart.py`, keyed by series name; the 9th series folds into "Other" rather than
+  inventing a hue. One series gets the sequential blue and no legend (the title names it).
+- Before touching any chart code: load the `dataviz` skill.
 
 ### Statistical rules (do not regress these)
 - **Never rank R² across different response transforms.** A log-y model's R² describes ln(y), not
@@ -76,6 +132,12 @@ Repo: https://github.com/SnoobieJunes/Prospectra
 - `uv run prospectra` — launch GUI (`--smoke` auto-quits after ~2.5 s, used for launch checks)
 - `uv run prospectra generate-example` — regenerate `examples/ice_cream_sales.csv`
 - `uv run prospectra run-flow <project> <flow>` — run a saved flow headless
+- `uv run prospectra scrape <url> --out <dir>` — scrape a page's tables to CSV (robots.txt obeyed;
+  accepts a local .html path or `file://`, which is how CI exercises it without a network)
+- `uv run prospectra connectors` — every connector, dialect, plugin, and LLM provider with its
+  honest status and whether its driver is installed on this machine
+- `uv run pyinstaller packaging/prospectra.spec --noconfirm` — build the desktop app
+- Optional extras: `uv sync --extra pdf|stats-files|odbc|jdbc` (jdbc also needs a JVM)
 - `uv run pytest` · `uv run ruff check .` · `uv run mypy prospectra` · `uv run lint-imports`
 
 ### Cross-OS rule (non-negotiable)

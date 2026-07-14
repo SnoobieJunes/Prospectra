@@ -136,6 +136,120 @@ Entry format:
   than half-built here.
 - Commit(s): this commit
 
+## 2026-07-14 — P6: warehouse dialects ship as descriptors, unverified, with no driver bundled
+- Phase: P6
+- Deviation: the plan said "warehouse dialect descriptors (Snowflake, BigQuery, Redshift,
+  Databricks, Athena first — flipping experimental→verified needs your credentials)". Delivered as
+  written, recorded for traceability: **all 12 dialects except SQLite are `experimental`**, and
+  none of their driver packages is a dependency of Prospectra — the app detects whether the driver
+  is importable and prints the exact `uv add …` command if not.
+- Why: bundling a dozen warehouse drivers would add hundreds of megabytes and a pile of native
+  build requirements for users who need one of them, or none. And no dialect can be called verified
+  from here: there are no warehouse credentials in this environment, and per CLAUDE.md a badge flips
+  only after a real connection is observed. `prospectra connectors` prints the whole matrix so the
+  state is never a guess.
+- Commit(s): 92a1a95
+
+## 2026-07-14 — P6: a new flow node (`Input: Database`) and a new hook on the Node ABC
+- Phase: P6
+- Deviation: the plan's P6 acceptance line is "install a dialect, connect, run a flow end-to-end",
+  but nothing in the plan's node list lets a flow *read a database*. Flow inputs were files only
+  (a P2 limitation). Added `Node.prepare(con)` — an optional hook that materializes external data
+  into the run's DuckDB connection before the graph is compiled — and an `Input: Database` node that
+  uses it.
+- Why: without it the acceptance line was unreachable, and "you can connect to Snowflake" and "you
+  can prep data on a canvas" would have been two features that never met. The hook is a default
+  no-op, the compiler is untouched (the graph still becomes one CTE query), and every existing node
+  ignores it. It is also the seam an API-input node will use.
+- Commit(s): 92a1a95
+
+## 2026-07-14 — P6: packaged app cannot load user-installed plugins
+- Phase: P6
+- Deviation: the plugin API works in a source install, and in the packaged build for plugins that
+  were installed **at build time** (the Jira plugin is bundled and CI asserts the frozen binary
+  still lists it). A user cannot add a connector to the packaged app — there is no pip inside a
+  PyInstaller bundle.
+- Why: a fundamental property of freezing, not an oversight. Two findings are worth recording:
+  (1) the first bundle built cleanly, launched, ran the whole stats engine — and had silently
+  dropped **every** entry-point plugin, because PyInstaller ships no `.dist-info` and
+  `importlib.metadata.entry_points()` therefore found nothing. `copy_metadata` fixes it, and CI now
+  greps the packaged binary's `connectors` output so this cannot regress unnoticed. (2) A drop-in
+  plugin *folder* (scanning a user directory at startup) would give the frozen app real
+  extensibility; it is not built, and is the obvious next step for the plugin story.
+- Commit(s): 92a1a95
+
+## 2026-07-14 — P6: no code signing / notarization; no installers
+- Phase: P6
+- Deviation: the plan says "PyInstaller builds for all 3 OSes". The builds exist and CI produces
+  artifacts for Windows, Linux, and macOS, but they are **unsigned**: no Apple notarization, no
+  Windows Authenticode. There is no .msi/.dmg/.deb installer either — the artifact is a folder (or
+  a .app).
+- Why: signing needs certificates and paid developer accounts that do not exist for this project
+  yet, and it is a distribution decision for the maintainer, not a build detail. Consequence, stated
+  plainly so the Windows testers are not surprised: SmartScreen will warn on first launch, and macOS
+  Gatekeeper will refuse a downloaded .app until it is opened via right-click ▸ Open. That is a real
+  cost of shipping unsigned, not a bug.
+- Commit(s): 92a1a95
+
+## 2026-07-14 — P6: Muse Spark LLM provider added (not in the plan)
+- Phase: P6
+- Deviation: the plan's day-one provider list was Anthropic, OpenAI, Gemini, Ollama. A fifth
+  provider, **Muse Spark**, was added at the user's request: a user-supplied OpenAI-compatible
+  endpoint where the URL, API key, and model are all typed in by the user.
+- Why: requested directly. It reuses the OpenAI chat-completions implementation (as Ollama does),
+  so it adds a provider without adding a protocol. The one non-obvious piece: it refuses to run
+  with no base URL rather than defaulting — the OpenAI SDK's default is `api.openai.com`, so a
+  silent fallback would send the user's data to a vendor they never named. `verified = False` like
+  the rest: the request shape is tested against a scripted OpenAI-standard server, but no live Muse
+  Spark endpoint has been called from this build.
+- Commit(s): 92a1a95
+
+## 2026-07-14 — P5: no Playwright/JS-rendering extra; no LLM-assisted extraction
+- Phase: P5
+- Deviation: the plan listed an optional `[scraper-js]` Playwright extra for JS-rendered pages, and
+  "LLM-assisted extraction for messy pages". Neither is built. The scraper fetches with httpx and
+  parses server-rendered HTML only; a page whose tables are drawn by JavaScript yields nothing.
+- Why: Playwright pulls a browser download per OS — a heavy, cross-platform-fragile dependency for
+  a case nothing downstream needs (Wikipedia, statistical agencies, and most reference tables are
+  server-rendered). LLM-assisted extraction would route page content to a provider, and no provider
+  has been run against a live API yet (see the P4 entry) — building an unverified extraction path on
+  top of an unverified provider path would produce a feature nobody could trust. Both are additive
+  behind the existing `Fetcher` Protocol and `parse` seam, so neither needs rework to land in P6.
+- Commit(s): 090e665
+
+## 2026-07-14 — P5: dashboards are a fixed 2-column grid, not a free-form canvas
+- Phase: P5
+- Deviation: the plan says "dashboards are saved grids of specs". They are — but the grid is
+  2 columns, filled left-to-right, with no drag-to-reposition or resize of tiles.
+- Why: the tile's *position* is already persisted (`Tile.row`/`Tile.column`), so a free-form layout
+  is a UI affordance over an unchanged model, not a data-model change. The chart layer's real work
+  in P5 was the honesty of what a chart says (truncation notes, log-scale drops, the one-axis rule)
+  and the drop-shelf builder; free layout is polish that can land any time without migration.
+- Commit(s): 090e665
+
+## 2026-07-14 — P5: PCA biplot still not built (promised here by the P3 deviation)
+- Phase: P5
+- Deviation: the P3 entry below deferred the PCA biplot to P5 ("it belongs with the dashboards work
+  where the chart layer gets its real treatment"). It is still not built.
+- Why: honest accounting rather than a quiet drop. P5's chart budget went to the ChartSpec model,
+  the shelf-driven builder, and the two chart-honesty rules (stated truncation, stated log-scale
+  drops) — those are the things that stop a dashboard from lying. The biplot remains a chart-only
+  addition: `PCAResult.scores` still carries the first two components, and `SpecChart` is now the
+  place it plugs into. Deferred to P6, and it will keep being deferred honestly until it is drawn.
+- Commit(s): 090e665
+
+## 2026-07-14 — P5: P2's canvas conveniences — one built, two still open
+- Phase: P5
+- Deviation: the P2 entry below deferred three canvas conveniences to P5. Status: **dragging catalog
+  datasets onto the canvas as inputs is now built** (a dataset drop becomes an Input node wired to
+  its file; a dataset a flow cannot read — an Excel sheet, a database table — is refused with the
+  reason instead of dropping a node that fails on run). The **undo stack** and the **visual column
+  picker** are still not built; flow params still take comma lists and SQL expressions.
+- Why: the dataset-drop was the one that the drag-and-drop backbone made nearly free and that the
+  P2 entry named explicitly. Undo and the column picker are editor ergonomics with no bearing on
+  what a flow can express or on any acceptance line; they are not silently dropped, they are here.
+- Commit(s): 090e665
+
 ## 2026-07-13 — Linux GUI launch runs under Xvfb, not the bare runner
 - Phase: P2
 - Deviation: CI's GUI-launch step uses the native platform plugin on Windows/macOS but `xvfb-run`

@@ -84,3 +84,31 @@ def test_version_flag(capsys):
         main(["--version"])
     assert excinfo.value.code == 0
     assert __version__ in capsys.readouterr().out
+
+
+# 2026-07-14 (P5): `scrape` — the whole scrape path (fetch → parse → emit) driven headless, with no
+# network: the CLI accepts a local .html file, which is exactly how CI exercises it on all 3 OSes.
+def test_scrape_writes_csvs_a_scan_can_read(tmp_path, capsys):
+    page = tmp_path / "countries.html"
+    page.write_text(
+        "<html><body><h2>GDP</h2><table><caption>GDP by country</caption>"
+        "<tr><th>Country</th><th>GDP</th></tr>"
+        "<tr><td>United States</td><td>27720700</td></tr>"
+        "<tr><td>China</td><td>17794782</td></tr></table></body></html>",
+        encoding="utf-8",
+    )
+    out_dir = tmp_path / "scraped"
+    assert main(["scrape", str(page), "--out", str(out_dir), "--tables-only"]) == 0
+
+    out = capsys.readouterr().out
+    assert "1 table(s)" in out
+    written = list(out_dir.glob("*.csv"))
+    assert len(written) == 1
+    assert written[0].read_text(encoding="utf-8").splitlines()[0] == "Country,GDP"
+
+
+def test_scrape_reports_a_page_with_no_tables_instead_of_writing_junk(tmp_path, capsys):
+    page = tmp_path / "empty.html"
+    page.write_text("<html><body><p>Nothing tabular here.</p></body></html>", encoding="utf-8")
+    assert main(["scrape", str(page), "--out", str(tmp_path / "out"), "--tables-only"]) == 1
+    assert "No data tables found" in capsys.readouterr().err

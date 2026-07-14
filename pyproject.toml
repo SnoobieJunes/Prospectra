@@ -26,7 +26,21 @@ dependencies = [
     "openai>=2.45.0",
     "google-genai>=2.11.0",
     "keyring>=25.7.0",
+    # 2026-07-14 (P5): scraper — httpx fetches, lxml/bs4 parse. pandas.read_html needs a parser
+    # backend (lxml); BeautifulSoup does the article-text extraction and the robots discovery.
+    "httpx>=0.28",
+    "beautifulsoup4>=4.13",
+    "lxml>=5.3",
 ]
+
+# 2026-07-14 (P6): optional extras. The default install stays light; a connector whose extra is
+# missing says exactly what to run rather than raising ImportError. JDBC additionally needs a JVM
+# on the machine — documented, and stated by the connector itself.
+[project.optional-dependencies]
+pdf = ["pdfplumber>=0.11"]
+stats-files = ["pyreadstat>=1.2"]
+odbc = ["pyodbc>=5.1"]
+jdbc = ["jaydebeapi>=1.2"]
 
 [project.urls]
 Repository = "https://github.com/SnoobieJunes/Prospectra"
@@ -43,7 +57,15 @@ dev = [
     "import-linter>=2",
     "pre-commit>=3.7",
     "openpyxl>=3.1.5",
+    # 2026-07-14 (P6): packaging + the plugin under test. The Jira plugin is installed as an
+    # editable dev dependency so the `prospectra.connectors` entry-point path is exercised for
+    # real — a plugin API nobody has loaded through entry points is an untested plugin API.
+    "pyinstaller>=6.11",
+    "prospectra-jira",
 ]
+
+[tool.uv.sources]
+prospectra-jira = { path = "plugins/prospectra_jira", editable = true }
 
 [build-system]
 requires = ["hatchling"]
@@ -99,6 +121,12 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = ["numpy", "numpy.*"]
 follow_imports = "skip"
+
+# 2026-07-14 (P6): the optional extras. They are not installed in the default environment (that is
+# the point of an extra), so mypy cannot see them. Our own code around them is still typed.
+[[tool.mypy.overrides]]
+module = ["pdfplumber", "pdfplumber.*", "pyreadstat", "jaydebeapi", "bs4", "bs4.*"]
+ignore_missing_imports = true
 
 # Architecture guarantee from the build plan: the engine must run headless on any OS.
 [tool.importlinter]

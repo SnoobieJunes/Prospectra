@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from importlib.metadata import entry_points
 from typing import Any, ClassVar, TypeVar
 
+import duckdb
+
 logger = logging.getLogger(__name__)
 
 ENTRY_POINT_GROUP = "prospectra.flow_nodes"
@@ -44,6 +46,15 @@ class Node(ABC):
 
         Default is a no-op: nodes without required params (e.g. Union) need no validation.
         """
+
+    # 2026-07-14 (P6): the seam that lets a flow read something DuckDB cannot open by itself.
+    # A node whose data lives behind a driver (a database table, an API) materializes it into the
+    # run's connection here, then compiles to a plain SELECT over what it created. The compiler is
+    # untouched — it still turns the graph into one CTE query — and every existing node ignores
+    # this hook entirely. Without it, "connect to a warehouse" and "prep it in a flow" were two
+    # features that could not meet.
+    def prepare(self, con: duckdb.DuckDBPyConnection) -> None:  # noqa: B027 - optional hook
+        """Optionally materialize external data into `con` before the graph's SQL is executed."""
 
     @abstractmethod
     def compile(self, inputs: list[str]) -> str:

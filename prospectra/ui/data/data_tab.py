@@ -1,3 +1,5 @@
+# 2026-07-14 (P5): The grid's columns are now drag sources — drag a header onto a chart shelf, the
+# chat dock, or the New-dataset zone. Selecting several columns first drags all of them.
 # 2026-07-13 (P1): The Data workspace — virtualized grid on top, column profile cards below,
 # with an honest status line (row/column counts, and "profiled on a sample" when true).
 
@@ -6,10 +8,18 @@ from __future__ import annotations
 import logging
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QLabel, QSplitter, QTableView, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QLabel,
+    QSplitter,
+    QTableView,
+    QVBoxLayout,
+    QWidget,
+)
 
 from prospectra.core.catalog import Catalog
 from prospectra.core.stats import TableProfile
+from prospectra.ui.data.column_header import DraggableHeader
 from prospectra.ui.data.grid_model import DuckTableModel
 from prospectra.ui.widgets.profile_cards import ProfileCardsPanel
 from prospectra.ui.workers import run_in_pool
@@ -32,7 +42,12 @@ class DataTab(QWidget):
         splitter = QSplitter(Qt.Orientation.Vertical)
         self._grid = QTableView()
         self._grid.setAlternatingRowColors(True)
-        self._grid.horizontalHeader().setDefaultSectionSize(110)
+        self._header = DraggableHeader(self._grid)
+        self._grid.setHorizontalHeader(self._header)
+        self._header.setDefaultSectionSize(110)
+        # Column selection is what a multi-column drag reads; rows stay clickable for reading data.
+        self._grid.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectColumns)
+        self._grid.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         splitter.addWidget(self._grid)
         self._cards = ProfileCardsPanel()
         splitter.addWidget(self._cards)
@@ -68,7 +83,11 @@ class DataTab(QWidget):
             lambda offset, limit: self._catalog.fetch_page(dataset_id, offset, limit),
         )
         self._grid.setModel(model)
-        self._status.setText(f"{ds.name} — {count:,} rows · {len(columns)} columns")
+        self._header.set_dataset(dataset_id, ds.name, ds.origin, columns)
+        self._status.setText(
+            f"{ds.name} — {count:,} rows · {len(columns)} columns"
+            "   ·   drag a column header onto a chart shelf, the chat, or “New dataset”"
+        )
 
     def _profile_ready(self, profile: TableProfile) -> None:
         self._cards.set_profile(profile)

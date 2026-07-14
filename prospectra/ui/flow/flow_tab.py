@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 from functools import partial
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QPointF, Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -72,6 +72,9 @@ class FlowTab(QWidget):
         self._scene.graph_changed.connect(self._graph_changed)
         self._scene.edge_rejected.connect(self._show_status)
         self._params.changed.connect(self._graph_changed)
+        # 2026-07-14 (P5): drag a dataset from the Sources tree onto the canvas -> an Input node.
+        self._view.dataset_dropped.connect(self._dataset_dropped)
+        self._view.drop_rejected.connect(self._show_status)
 
     # -- construction -------------------------------------------------------------------
 
@@ -132,6 +135,15 @@ class FlowTab(QWidget):
         self._scene.clearSelection()
         item = self._scene._nodes[node_id]
         item.setSelected(True)
+
+    def _dataset_dropped(self, dataset: str, origin: str, x: float, y: float) -> None:
+        """A dataset dropped on the canvas becomes an Input node pointed at its file."""
+        node_id = self._scene.add_node("input_file", QPointF(x, y))
+        self.graph.nodes[node_id].node.params["path"] = origin
+        self._scene.clearSelection()
+        self._scene._nodes[node_id].setSelected(True)
+        self._graph_changed()
+        self._show_status(f"Added “{dataset}” as an Input node — connect a step to it.")
 
     def _graph_changed(self) -> None:
         self._refresh_changes()

@@ -71,3 +71,69 @@ jobs:
       - name: GUI launch (Xvfb display)
         if: runner.os == 'Linux'
         run: xvfb-run -a uv run prospectra --smoke
+
+  # 2026-07-14 (P6): packaging. A build that succeeds proves nothing — the first macOS bundle built
+  # cleanly and had silently dropped every entry-point plugin (PyInstaller ships no .dist-info, so
+  # importlib.metadata found nothing). So the job does not stop at "built": it LAUNCHES the bundled
+  # binary and asserts the packaged app still sees its plugins and can run the engine.
+  package:
+    name: package (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Qt system libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb libegl1 libgl1 libxkbcommon-x11-0 libdbus-1-3 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xkb1
+
+      - name: Install project
+        run: uv sync --frozen
+
+      - name: Build the app (PyInstaller)
+        run: uv run pyinstaller packaging/prospectra.spec --noconfirm
+
+      # The bundled binary, not the dev install: does it still know its connectors and plugins?
+      - name: Packaged app keeps its plugins (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          ./dist/Prospectra.app/Contents/MacOS/Prospectra connectors | tee out.txt
+          grep -q "Jira (issues)" out.txt
+          ./dist/Prospectra.app/Contents/MacOS/Prospectra --smoke
+
+      - name: Packaged app keeps its plugins (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          ./dist/Prospectra/Prospectra connectors | tee out.txt
+          grep -q "Jira (issues)" out.txt
+          xvfb-run -a ./dist/Prospectra/Prospectra --smoke
+
+      - name: Packaged app keeps its plugins (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          .\dist\Prospectra\Prospectra.exe connectors | Tee-Object -FilePath out.txt
+          if (-not (Select-String -Path out.txt -Pattern "Jira \(issues\)" -Quiet)) {
+            throw "The packaged app lost its entry-point plugins"
+          }
+          .\dist\Prospectra\Prospectra.exe --smoke
+
+      - name: Upload the artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: prospectra-${{ matrix.os }}
+          path: dist/
+          retention-days: 14

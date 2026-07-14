@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 from prospectra.core.catalog import Catalog
 from prospectra.core.mining import Finding, ScanResult, scan_relation
 from prospectra.ui.analysis.explain_panel import ExplainPanel
+from prospectra.ui.analysis.findings_table import FindingsTable
 from prospectra.ui.analysis.trust_light import TrustLight
 from prospectra.ui.widgets.charts import Chart
 from prospectra.ui.workers import run_in_pool
@@ -99,7 +100,8 @@ class AnalyzeTab(QWidget):
 
     def _build_relationships(self) -> QWidget:
         page = QSplitter(Qt.Orientation.Horizontal)
-        self._findings = QTableWidget(0, 4)
+        # 2026-07-14 (P5): a FindingsTable, so a row can be dragged into the chat dock as a chip.
+        self._findings = FindingsTable(0, 4)
         self._findings.setHorizontalHeaderLabels(["Relationship", "Strength", "Effect", "q-value"])
         self._findings.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._findings.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -263,6 +265,7 @@ class AnalyzeTab(QWidget):
 
     def _fill_findings(self, scan: ScanResult) -> None:
         pairs = [f for f in scan.findings if f.kind in ("correlation", "group-difference")]
+        self._findings.set_findings(pairs)  # the rows are now draggable payloads
         self._findings.setRowCount(len(pairs))
         for row, finding in enumerate(pairs):
             cells = [

@@ -32,10 +32,27 @@ class OutputResult:
 
 
 class FlowRunner:
+    # 2026-07-14 (P6): every node in the target's ancestry gets a chance to materialize external
+    # data into this run's connection first (Node.prepare). File nodes ignore it; a Database input
+    # uses it to pull its table in. Only then is the graph compiled and executed as one query.
+    @staticmethod
+    def _prepare(
+        graph: FlowGraph, con: duckdb.DuckDBPyConnection, target: str | None = None
+    ) -> None:
+        for node_id in graph.topo_order(target):
+            inst = graph.nodes[node_id]
+            try:
+                inst.node.prepare(con)
+            except duckdb.Error as exc:
+                raise FlowRunError(node_id, str(exc)) from exc
+            except Exception as exc:  # a driver/network failure belongs to the node that caused it
+                raise FlowRunError(node_id, str(exc)) from exc
+
     def preview(self, graph: FlowGraph, node_id: str, limit: int = 500) -> PreviewResult:
         sql = compile_sql(graph, node_id)
         con = duckdb.connect()
         try:
+            self._prepare(graph, con, node_id)
             described = con.execute(f"DESCRIBE {sql}").fetchall()
             columns = [(str(r[0]), str(r[1])) for r in described]
             count_row = con.execute(f"SELECT count(*) FROM ({sql})").fetchone()
@@ -51,6 +68,7 @@ class FlowRunner:
         sql = compile_sql(graph, node_id)
         con = duckdb.connect()
         try:
+            self._prepare(graph, con, node_id)
             return profile_relation(con, f"({sql})", max_rows=max_rows)
         except duckdb.Error as exc:
             raise FlowRunError(node_id, str(exc)) from exc
@@ -63,6 +81,7 @@ class FlowRunner:
         con = duckdb.connect()
         try:
             for node_id in graph.output_nodes():
+                self._prepare(graph, con, node_id)
                 inst = graph.nodes[node_id]
                 out_path = Path(str(inst.node.params.get("path", "")).strip())
                 fmt = str(inst.node.params.get("format", "csv")).lower()

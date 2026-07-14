@@ -2,6 +2,7 @@
 from prospectra.core.project.store import (
     SCHEMA_VERSION,
     ConnectionRecord,
+    DashboardRecord,
     FlowRecord,
     ProjectStore,
     ProjectStoreError,
@@ -11,6 +12,7 @@ from prospectra.core.project.store import (
 __all__ = [
     "SCHEMA_VERSION",
     "ConnectionRecord",
+    "DashboardRecord",
     "FlowRecord",
     "ProjectStore",
     "ProjectStoreError",

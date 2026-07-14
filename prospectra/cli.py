@@ -1,3 +1,9 @@
+# 2026-07-14 (P6): `connectors` — print every connector, dialect, and LLM provider with its honest
+# status badge and whether its driver is installed. One command answers "what can this actually talk
+# to, right now, on this machine?" — which is exactly the question the badges exist to answer.
+# 2026-07-14 (P5): `scrape` — fetch a page (robots.txt obeyed, per-host rate limited), extract its
+# tables, and write them as CSVs that any flow or scan can read. Accepts a local .html path or a
+# file:// URL too, which is how CI exercises the whole scrape path with no network.
 # 2026-07-13 (P3): `scan` is now real — mines a data file for relationships and prints the ranked
 # table headless (the P3 acceptance path; also how CI exercises the whole stats engine).
 # 2026-07-13 (P2): `run-flow` is now real — opens a project, loads a flow by name or id, and
@@ -38,6 +44,20 @@ def main(argv: list[str] | None = None) -> int:
     run_flow.add_argument("project", help="Path to a .prospectra project file")
     run_flow.add_argument("flow", help="Flow name or id")
 
+    scrape = sub.add_parser("scrape", help="Scrape a web page's tables into CSV files")
+    scrape.add_argument("url", help="Page URL (http/https), or a local .html file to re-parse")
+    scrape.add_argument("--out", default="scraped", help="Folder for the CSVs (default: ./scraped)")
+    scrape.add_argument(
+        "--tables-only",
+        action="store_true",
+        help="Fail if the page has no tables (instead of saving its article text)",
+    )
+    scrape.add_argument("--max-tables", type=int, help="Keep only the first N tables")
+
+    sub.add_parser(
+        "connectors", help="List every connector, database dialect, and LLM provider + its status"
+    )
+
     gen = sub.add_parser(
         "generate-example", help="Write the synthetic ice-cream tutorial dataset (seeded)"
     )
@@ -51,6 +71,10 @@ def main(argv: list[str] | None = None) -> int:
         return _scan(args.path, args.target, args.max_rows, args.seed, args.alpha, args.pca)
     if args.command == "run-flow":
         return _run_flow(args.project, args.flow)
+    if args.command == "scrape":
+        return _scrape(args.url, args.out, args.tables_only, args.max_tables)
+    if args.command == "connectors":
+        return _connectors()
     if args.command == "generate-example":
         from prospectra.example_data import write_csv
 
@@ -148,6 +172,83 @@ def _scan(
         return 0
     finally:
         catalog.close()
+
+
+def _scrape(url: str, out: str, tables_only: bool, max_tables: int | None) -> int:
+    from prospectra.core.scraper import RobotsDisallowed, ScraperError, scrape
+
+    try:
+        result = scrape(url, Path(out), tables_only=tables_only, max_tables=max_tables)
+    except RobotsDisallowed as exc:
+        print(f"refused: {exc}", file=sys.stderr)  # obeying robots.txt is not a failure to fix
+        return 1
+    except ScraperError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"\n{result.summary}\n")
+    for emitted in result.files:
+        print(f"  {emitted.path}  ({emitted.rows:,} rows x {emitted.columns} cols)  {emitted.name}")
+    if result.article_path is not None:
+        print(f"  {result.article_path}  {result.article_title}")
+    print("\nOpen any of these with `prospectra scan <file>` or in the app (Sources ▸ Open File…).")
+    return 0
+
+
+def _connectors() -> int:
+    from prospectra.core.connectors import (
+        DIALECTS,
+        SUPPORTED_FILE_SUFFIXES,
+        external_connectors,
+        jdbc_available,
+    )
+    from prospectra.core.llm import PROVIDERS
+
+    def badge(status: str) -> str:
+        return "verified " if status == "verified" else "EXPERIMENTAL"
+
+    print("\nFILES")
+    print(f"  {', '.join(SUPPORTED_FILE_SUFFIXES)}")
+    print("  (.pdf needs `uv sync --extra pdf`; .sav/.dta/.sas7bdat need `--extra stats-files`)")
+
+    print("\nDATABASES (one generic SQLAlchemy connector; these are the forms it knows)")
+    print(f"  {'dialect':<26} {'status':<13} driver")
+    for dialect in DIALECTS:
+        driver = (
+            "built in"
+            if not dialect.driver_package
+            else (
+                "installed" if dialect.driver_installed else f"MISSING — {dialect.install_hint()}"
+            )
+        )
+        print(f"  {dialect.display_name:<26} {badge(dialect.status):<13} {driver}")
+    print(
+        f"  {'Generic JDBC':<26} {'EXPERIMENTAL':<13} "
+        f"{'installed' if jdbc_available() else 'MISSING — uv sync --extra jdbc (needs a JVM)'}"
+    )
+
+    print("\nAPIs")
+    print(f"  {'REST / OData (mapping)':<26} {'EXPERIMENTAL':<13} built in")
+
+    plugins = external_connectors()
+    print("\nPLUGINS (installed, via the prospectra.connectors entry point)")
+    if not plugins:
+        print("  (none)")
+    for name, cls in sorted(plugins.items()):
+        print(f"  {cls.display_name:<26} {badge(cls.status):<13} {name}")
+
+    print("\nLLM PROVIDERS")
+    for provider in PROVIDERS.values():
+        note = "custom endpoint (URL + key + model)" if provider.supports_custom_endpoint else ""
+        status = badge("verified" if provider.verified else "x")
+        print(f"  {provider.display_name:<44} {status:<13} {note}")
+
+    print(
+        "\nEXPERIMENTAL means: implemented and tested against scripted servers, but never run\n"
+        "against a real one from this build. It is not a guess about whether it works — it is a\n"
+        "statement that nobody has watched it work.\n"
+    )
+    return 0
 
 
 def _run_flow(project_path: str, flow_ref: str) -> int:

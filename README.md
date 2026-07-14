@@ -6,9 +6,13 @@ relationships (correlation scans with FDR correction, regressions ranked by R² 
 ANOVA, PCA), visualizes findings on dashboards, and uses LLMs plus web search to hypothesize —
 with cited sources — *why* those relationships might exist.
 
-**Status: pre-alpha (P3 done).** Working today:
+**Status: pre-alpha — all phases (P0–P6) delivered.** Working today:
 
-- **Connect** — CSV/TSV/text, JSON, Parquet, Excel, and any SQL database by SQLAlchemy URL.
+- **Connect** — CSV/TSV/text, JSON, Parquet, Excel, PDF tables, SPSS/Stata/SAS; 12 database
+  dialects with generated connection forms (SQLite, Postgres, MySQL, SQL Server, Snowflake,
+  BigQuery, Redshift, Databricks, Athena, Trino, Oracle, ODBC) plus generic JDBC; and **any JSON
+  REST/OData API** via a saved mapping (auth + pagination + paths→columns), with the columns
+  auto-suggested from a sample response.
 - **Prep** — a Tableau-Prep-style flow canvas with 12 node types that compiles an entire pipeline
   into a single DuckDB query.
 - **Mine** — point it at data and it finds what's interesting: every pair of columns tested with
@@ -20,13 +24,30 @@ with cited sources — *why* those relationships might exist.
 
 - **Ask** — a data buddy you can chat with (Anthropic, OpenAI, Gemini, or a local Ollama model),
   and a "why might this be?" button on every finding that answers with cited sources.
+- **Scrape** — pull the tables off a web page into CSVs that feed everything above. It obeys
+  robots.txt (checked *before* the request; a disallow is a refusal, not an obstacle) and
+  rate-limits itself per host.
+- **Chart** — build a chart by dragging columns onto X / Y / Colour shelves, and pin it to a
+  dashboard that saves into your project. Charts state their own caveats: a top-10 bar chart says
+  it is showing 10 of 194, and a log scale that cannot draw your zeros says how many it dropped.
+- **Drag anything anywhere** — a column from the grid onto a chart shelf, into the chat as context,
+  or onto "New dataset" (which derives the dataset *and* writes the flow that rebuilds it); a
+  dataset onto the flow canvas to become an Input node; a finding into the chat to ask about it.
 
-Dashboards and the web scraper are P5. Anything not built yet says so in the UI rather than
-pretending.
+- **Extend** — connectors, flow nodes, LLM providers, and chart types are entry-point plugins.
+  `plugins/prospectra_jira` is the reference: a real installed distribution, ~60 lines, which
+  *describes* Jira's API rather than reimplementing HTTP. See `docs/writing-a-connector.md`.
 
-> **The four LLM providers are badged "experimental."** Their request formats are implemented and
-> the whole pipeline around them is tested, but no provider has been run against its live API in
-> this build (there are no keys here). Nothing claims to work that hasn't been observed working.
+Anything not built yet says so in the UI rather than pretending. Run `uv run prospectra connectors`
+to see every source, its status badge, and whether its driver is installed on your machine.
+
+> **Almost everything that talks to a third party is badged "experimental."** The five LLM
+> providers (Anthropic, OpenAI, Gemini, Ollama, and Muse Spark — a custom OpenAI-compatible
+> endpoint you point at yourself), every database dialect except SQLite, the REST tier, and the Jira
+> plugin all have their request formats implemented and tested against scripted servers — but none
+> has been run against a real live service from this build, because there are no credentials here.
+> A badge flips to "verified" only after someone makes a real call and watches it work. Nothing
+> claims to work that hasn't been observed working.
 
 ## Your data stays yours
 
@@ -91,6 +112,22 @@ each OS (see `.github/workflows/ci.yml`).
 4. Hit **Preview selected** — the profile cards and data preview below the canvas fill in.
 5. Add an **Output** node, give it a `.csv` path, and hit **Run flow**.
 
+## Install the app
+
+Prebuilt artifacts for Windows, Linux, and macOS are produced by CI on every commit
+(`.github/workflows/ci.yml`), and each one is launched by the build job before it is uploaded — a
+build that succeeds but has lost its plugins is a build that fails here.
+
+Build it yourself:
+
+```sh
+uv run pyinstaller packaging/prospectra.spec --noconfirm    # -> dist/
+```
+
+The builds are **unsigned**: Windows SmartScreen will warn on first launch, and macOS Gatekeeper
+needs a right-click ▸ Open. That is the cost of shipping without a paid signing certificate, and it
+is recorded in `Deviations.md`.
+
 ## Headless CLI
 
 The whole engine runs without a display (this is what CI exercises):
@@ -99,12 +136,29 @@ The whole engine runs without a display (this is what CI exercises):
 uv run prospectra generate-example                 # seeded tutorial dataset
 uv run prospectra run-flow <project.prospectra> <flow-name>   # run a saved flow
 uv run prospectra scan examples/ice_cream_sales.csv --target ice_cream_sales --pca
+uv run prospectra scrape <url> --out scraped/          # a page's tables -> CSVs
+uv run prospectra connectors                          # what can this talk to, right now?
 ```
 
 That last command mines the tutorial dataset, whose answer is known by construction: sales were
 generated from temperature, school holidays, and ad spend, plus two decoy columns of pure noise.
 The scan ranks the three real drivers at the top, rejects both decoys via FDR control, and
 recovers the planted equation in its combined model (adjusted R² = 0.90).
+
+## The whole pipeline, on real data
+
+This ran against live Wikipedia, end to end:
+
+```sh
+uv run prospectra scrape "https://en.wikipedia.org/wiki/List_of_countries_by_GDP_(nominal)" --out scraped/
+```
+
+It obeys robots.txt, skips the page furniture (its map *legend* is not a dataset), and writes each
+real table as a named CSV. The GDP table's cells are messy the way real data is — `—N/a`,
+`98,964 (2024)`, `China[n 1]` — so the numbers arrive as text. **The scraper does not guess at
+them**: cleaning is the flow's job. A seven-node flow (TRY_CAST the numbers, strip the footnotes,
+drop the aggregate "World" row) turns it into 194 clean rows, which the miner then scans and which
+a bar chart then ranks on a dashboard saved in the project file.
 
 ## A word on what this tool will and won't tell you
 

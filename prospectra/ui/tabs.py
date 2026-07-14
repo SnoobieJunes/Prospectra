@@ -12,7 +12,8 @@ _PLACEHOLDERS: tuple[tuple[str, str], ...] = (
     ("Flow", "Prep flow canvas — arrives in phase P2.\nInputs → clean → join/union → output."),
     ("Data", "Data grid & column profiler — arrives in phase P1."),
     ("Analyze", "Mining engine — arrives in phase P3.\nCorrelation scan, regressions, ANOVA, PCA."),
-    ("Dashboards", "Dashboards — arrive in phase P5."),
+    # 2026-07-14 (P5): the real DashboardTab is passed in as an override by the main window.
+    ("Dashboards", "Dashboards — drag columns onto chart shelves."),
 )
 
 
