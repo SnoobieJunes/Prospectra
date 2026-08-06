@@ -68,6 +68,13 @@ Repo: https://github.com/SnoobieJunes/Prospectra
 - **A path is not a credential.** `Field.path_like` decides the quoting: paths keep their separators,
   everything else is fully escaped. Escaping a SQLite path's slashes made SQLAlchemy *silently create
   an empty database* and report a good connection — found by running the acceptance path, not a test.
+  **This includes the Windows separator.** The P6 fix kept `/` and `:` safe but not `\`, so
+  `C:\data\sales.db` still became `%5C…` and did the exact same silent-empty-database thing on the
+  one platform the testers use — Windows CI was red on it from P6 until 2026-08-05. Path-like values
+  are normalized to POSIX separators before quoting (the `path_lit` rule, applied to URLs), and the
+  regression test hands the quoter a backslash path directly so it fails on **every** OS, not just
+  on Windows CI. A test that only reproduces on the platform you do not develop on is a test that
+  will sit red.
 - **A missing SQLite file is an error**, because SQLite would otherwise create an empty one and the
   user would see a healthy connection with no tables.
 - **Passwords never reach the project file.** `redact_url()` strips them; the real secret goes to the

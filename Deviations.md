@@ -13,6 +13,22 @@ Entry format:
 - Commit(s): hash(es)
 ```
 
+## 2026-08-05 — Windows SQLite paths: the P6 "a path is not a credential" fix was half a fix
+- Phase: P6 (connector), found by CI after the P7 push
+- Deviation: `Field.quote_value` kept `/` and `:` safe for path-like fields but not `\`, so on
+  Windows every separator in `C:\Users\me\sales.db` became `%5C`. SQLAlchemy then did exactly what
+  the P6 rule describes: it created an empty database at that literal name, reported a healthy
+  connection, and every subsequent query failed with "Table orders not found". Path-like values are
+  now normalized to POSIX separators before quoting (the `path_lit` rule applied to URLs).
+- Why it survived: the regression test built its path from the local OS, so on macOS/Linux it could
+  never see the bug. Windows CI had been red on these three tests since P6 — the platform the
+  testers use, and the one the maintainer does not develop on. The new test hands the quoter a
+  literal backslash path, so it fails on every OS.
+- Scope check: only `path_like` fields are normalized. A password containing a backslash keeps it
+  and is still fully escaped (`test_a_backslash_in_a_credential_is_still_escaped`); Athena's
+  `s3://bucket/path/` and Databricks' `/sql/1.0/warehouses/…` are unchanged.
+- Commit(s): this commit
+
 ## 2026-08-05 — P7 hardening: ~40 review findings fixed; three project rules had been broken
 - Phase: P7
 - Deviation: P7 as first written violated three of this repo's own non-negotiable rules. Four

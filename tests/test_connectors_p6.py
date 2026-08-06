@@ -511,11 +511,35 @@ def test_a_file_path_is_not_quoted_like_a_credential(tmp_path: Path):
     db = _sales_db(tmp_path)
     url = DIALECTS_BY_KEY["sqlite"].build_url({"path": str(db)})
     assert "%2F" not in url
-    assert str(db) in url
+    assert "%5C" not in url  # 2026-08-05: nor the Windows separator
+    assert Path(db).as_posix() in url
 
     from sqlalchemy.engine import make_url
 
-    assert make_url(url).database == str(db)  # SQLAlchemy reads back the real path
+    # SQLAlchemy reads back a path that opens the real file on this OS.
+    assert Path(make_url(url).database or "").resolve() == db.resolve()
+
+
+# 2026-08-05: the Windows half of the rule above, reproduced on EVERY platform by handing the
+# quoter a backslash path directly. The original test used the local OS's path separator, so on
+# macOS/Linux it could never see the bug and Windows CI carried it alone from P6 until now.
+def test_a_windows_path_keeps_its_separators_on_every_platform():
+    url = DIALECTS_BY_KEY["sqlite"].build_url({"path": r"C:\Users\me\data\sales.db"})
+    assert url == "sqlite:///C:/Users/me/data/sales.db"
+    assert "%5C" not in url and "%2F" not in url
+
+    from sqlalchemy.engine import make_url
+
+    assert make_url(url).database == "C:/Users/me/data/sales.db"
+
+
+def test_a_backslash_in_a_credential_is_still_escaped():
+    """Only path-like fields are normalized — a password keeps every character it was given."""
+    from prospectra.core.connectors.dialects import Field
+
+    assert Field("password", "Password", secret=True).quote_value(r"pa\ss/word@1") == (
+        "pa%5Css%2Fword%401"
+    )
 
 
 def test_a_missing_sqlite_file_is_an_error_not_a_new_empty_database(tmp_path: Path):
