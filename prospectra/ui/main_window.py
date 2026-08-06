@@ -26,13 +26,16 @@ from prospectra import __version__
 from prospectra.core.catalog import Catalog, Dataset, SqlConnection
 from prospectra.core.connectors import SUPPORTED_FILE_SUFFIXES
 from prospectra.core.connectors.dialects import redact_url
+from prospectra.core.connectors.rest import RestMapping
 from prospectra.core.flow import FlowError, FlowGraph, flow_from_columns, flow_readable
+from prospectra.core.http import HttpRequest
 from prospectra.core.llm import secrets as secret_store
 from prospectra.core.mining import save_scan
 from prospectra.core.project import ProjectStore, ProjectStoreError
 from prospectra.core.scraper import ScrapeResult, scrape
 from prospectra.core.viz import Dashboard
 from prospectra.ui.analysis.analyze_tab import AnalyzeTab
+from prospectra.ui.api.playground import ApiPlaygroundTab
 from prospectra.ui.dashboards.dashboard_tab import DashboardTab
 from prospectra.ui.data.data_tab import DataTab
 from prospectra.ui.dialogs.add_api import AddApiDialog
@@ -65,15 +68,20 @@ class MainWindow(QMainWindow):
         self._flow_tab = FlowTab()
         self._analyze_tab = AnalyzeTab(self.catalog)
         self._dashboard_tab = DashboardTab(self.catalog)
+        self._api_tab = ApiPlaygroundTab()  # 2026-07-31 (P7)
         self._tabs = make_central(
             {
                 "Data": self._data_tab,
                 "Flow": self._flow_tab,
                 "Analyze": self._analyze_tab,
                 "Dashboards": self._dashboard_tab,
+                "API": self._api_tab,
             }
         )
         self.setCentralWidget(self._tabs)
+        self._saved_apis: dict[str, RestMapping] = {}  # connection record id -> mapping
+        self._api_tab.request_save_requested.connect(self._save_api_request)
+        self._api_tab.source_save_requested.connect(self._save_api_source)
 
         self._sources = SourcesDock()
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self._sources)
@@ -95,6 +103,7 @@ class MainWindow(QMainWindow):
         self._sources.new_dataset_requested.connect(self._new_dataset_from_columns)
         self._sources.dataset_activated.connect(self._show_dataset)
         self._sources.table_activated.connect(self._open_table)
+        self._sources.api_activated.connect(self._open_saved_api)
 
         self._build_menus()
         self.statusBar().showMessage("Open a data file to get started — Sources ▸ Open File…")
@@ -231,6 +240,7 @@ class MainWindow(QMainWindow):
             self._store.save_connection(
                 mapping.name, "rest", mapping.to_dict(), mapping.auth.secret_ref or None
             )
+            self._restore_saved_connections(self._store)  # 2026-07-31 (P7): show it immediately
 
         self.statusBar().showMessage(f"Fetching {mapping.url}…")
         run_in_pool(
@@ -244,6 +254,121 @@ class MainWindow(QMainWindow):
     def _api_opened(self, dataset: Dataset) -> None:
         self._datasets_opened([dataset])
         self.statusBar().showMessage(f"Opened {dataset.name} — {dataset.origin}")
+
+    # -- the API playground (P7) ------------------------------------------------------
+
+    def _save_api_request(self, request: HttpRequest) -> None:
+        """Persist a playground request into the project (connector_type "http_request")."""
+        if self._store is None:
+            QMessageBox.information(
+                self, "No project open", "Create or open a project first (File ▸ New Project…)."
+            )
+            return
+        name, ok = QInputDialog.getText(self, "Save request", "Request name:")
+        if not ok or not name.strip():
+            return
+        record = self._store.save_connection(name.strip(), "http_request", request.to_dict())
+        self._restore_saved_connections(self._store)
+        self.statusBar().showMessage(f"Saved request '{record.name}' to {self._store.path.name}")
+
+    def _save_api_source(self, mapping: RestMapping, token: str) -> None:
+        """Promote a playground request to a data source — the same path "Add API…" takes."""
+        name, ok = QInputDialog.getText(
+            self, "Save as data source", "Table name:", text=mapping.name
+        )
+        if not ok or not name.strip():
+            return
+        mapping.name = name.strip()
+        # 2026-08-05: say so before doing anything. Without a project this used to write the token
+        # to the keychain, persist NO record, show "Fetching…", and let the user believe the source
+        # was saved — it died with the session.
+        if self._store is None:
+            proceed = QMessageBox.question(
+                self,
+                "No project open",
+                f"There is no project open, so “{mapping.name}” cannot be saved.\n\n"
+                "Fetch it once for this session anyway? (Create a project first if you want to "
+                "keep it.)",
+            )
+            if proceed != QMessageBox.StandardButton.Yes:
+                return
+        if mapping.auth.kind != "none" and not mapping.auth.secret_ref:
+            mapping.auth.secret_ref = f"api:{mapping.name}"
+        if token and mapping.auth.kind != "none":
+            try:
+                secret_store.set_api_key(mapping.auth.secret_ref, token)
+            except secret_store.SecretsError as exc:
+                logger.warning("Keychain unavailable; the token is used this session only: %s", exc)
+        if self._store is not None:
+            record = self._store.save_connection(
+                mapping.name, "rest", mapping.to_dict(), mapping.auth.secret_ref or None
+            )
+            self._saved_apis[record.id] = mapping
+            self._sources.add_saved_api(record.id, mapping.name, mapping.url)
+        self.statusBar().showMessage(f"Fetching {mapping.url}…")
+        run_in_pool(
+            self.catalog.open_api,
+            mapping,
+            token or None,
+            on_result=self._api_opened,
+            on_error=self._source_error,
+        )
+
+    def _open_saved_api(self, record_id: str) -> None:
+        """Double-click on a saved API source: re-fetch it (explicitly — never behind the back)."""
+        mapping = self._saved_apis.get(record_id)
+        if mapping is None:
+            return
+
+        def fetch() -> Dataset:
+            secret = None
+            if mapping.auth.kind != "none" and mapping.auth.secret_ref:
+                secret = secret_store.get_api_key(mapping.auth.secret_ref)
+                if not secret:
+                    raise RuntimeError(
+                        f"The credential {mapping.auth.secret_ref!r} is not in this machine's "
+                        "keychain. Re-enter the token via Sources ▸ Add API…"
+                    )
+            return self.catalog.open_api(mapping, secret)
+
+        self.statusBar().showMessage(f"Fetching {mapping.url}…")
+        run_in_pool(fetch, on_result=self._api_opened, on_error=self._source_error)
+
+    def _restore_saved_connections(self, store: ProjectStore) -> None:
+        """Bring the project's saved API sources and playground requests back into the UI.
+
+        Before P7, `list_connections()` had exactly one caller (a test) — everything saved into
+        the connections table was write-only, and saved API sources never came back.
+        """
+        self._saved_apis.clear()
+        self._sources.clear_saved_apis()
+        saved_requests: list[tuple[str, str, HttpRequest]] = []
+        try:
+            # 2026-08-05: list_connections() json.loads()es every row BEFORE the per-row guard
+            # below could ever run, so one corrupt row raised straight out of project open. The
+            # comment claiming otherwise was wrong.
+            records = store.list_connections()
+        except (ValueError, KeyError, TypeError) as exc:
+            logger.warning("Could not read this project's saved connections: %s", exc)
+            self._api_tab.set_saved_requests([])
+            self.statusBar().showMessage(
+                "This project's saved connections could not be read — everything else opened."
+            )
+            return
+        for record in records:
+            try:
+                if record.connector_type == "rest":
+                    mapping = RestMapping.from_dict(record.config)
+                    self._saved_apis[record.id] = mapping
+                    self._sources.add_saved_api(record.id, record.name, mapping.url)
+                elif record.connector_type == "http_request":
+                    saved_requests.append(
+                        (record.id, record.name, HttpRequest.from_dict(record.config))
+                    )
+            except (ValueError, KeyError) as exc:
+                # A newer build's row (or a corrupt one) must not sink the whole project open.
+                logger.warning("Skipping saved connection %r: %s", record.name, exc)
+        self._api_tab.set_saved_requests(saved_requests)
 
     def _open_table(self, connection_id: str, table: str) -> None:
         self.statusBar().showMessage(f"Loading table {table}…")
@@ -493,6 +618,8 @@ class MainWindow(QMainWindow):
         self._store = store
         self.setWindowTitle(f"Prospectra — {store.path.stem}")
         self.statusBar().showMessage(f"Project: {store.path}")
+        # 2026-07-31 (P7): saved API sources and playground requests come back on open.
+        self._restore_saved_connections(store)
         logger.info("Opened project %s (schema v%s)", store.path, store.schema_version)
 
     @property

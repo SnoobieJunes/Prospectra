@@ -76,6 +76,11 @@ class Provider(ABC):
     # OpenAI-compatible endpoint such as Muse Spark.) The settings dialog reads this instead of
     # testing provider names, so a new endpoint-style provider needs no change to the UI.
     supports_custom_endpoint: ClassVar[bool] = False
+    # 2026-08-05: the endpoint a provider ships with, and the ONLY place it is written down.
+    # The settings dialog prefills this and the user can replace it, so pointing Prospectra at
+    # any other OpenAI-compatible gateway needs no code change. Empty = no default (Ollama sets
+    # its own in __init__; OpenAI/Anthropic/Gemini use their SDK's own base).
+    default_base_url: ClassVar[str] = ""
     # A one-paragraph setup note the settings dialog shows when this provider is picked.
     setup_hint: ClassVar[str] = ""
     # Honesty flag surfaced in the UI: has this provider been exercised against its live API in
@@ -91,7 +96,11 @@ class Provider(ABC):
     ) -> None:
         self.api_key = api_key
         self.model = model or self.default_model
-        self.base_url = base_url
+        # A blank/absent base URL falls back to the provider's declared default, so a user who
+        # clears the field gets the provider's own endpoint back rather than whatever the
+        # underlying SDK would pick (for an OpenAI-compatible client that is api.openai.com —
+        # i.e. this user's data going to a vendor they never named).
+        self.base_url = (base_url or "").strip() or self.default_base_url or None
         # Every provider MUST record its outbound payload here before the call leaves the process.
         self.audit = audit if audit is not None else AuditLog()
 

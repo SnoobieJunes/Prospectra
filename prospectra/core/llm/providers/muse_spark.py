@@ -1,20 +1,26 @@
-# 2026-07-14 (P6): Muse Spark — a provider you point at yourself.
+# 2026-08-05: Muse Spark now ships real defaults — endpoint https://api.meta.ai/v1 and model
+# muse-spark-1.2 — and BOTH stay editable in Settings ▸ Data Buddy. That is the point: this
+# provider is also the generic door for any OpenAI-compatible gateway, so pointing Prospectra at
+# your own endpoint is a settings change, never a code change. The defaults live in
+# `default_base_url` / `default_model`, which the settings form reads from the class (no
+# provider-name special cases anywhere in the UI).
 #
-# It speaks the OpenAI chat-completions standard, so it reuses OpenAIProvider's request/response
-# handling wholesale (the same reason Ollama does). What makes it its own provider rather than
-# "OpenAI with a different base URL" is that all three of endpoint, key, and model are **required
-# and user-supplied**: there is no default endpoint to fall back on and no default model to guess.
-# A silent fallback to api.openai.com would be the worst possible failure here — the user's data
-# would go somewhere they did not name.
+# The previous defaults advertised `https://api.musespark.ai/v1`, a hostname that does not
+# resolve — the app was instructing users to paste an endpoint that could never answer.
 #
-# So the checks are up-front and specific, before any payload is built:
-#   * no base URL   -> "paste the endpoint URL", not a 404 from somebody else's server;
+# 2026-07-14 (P6): It speaks the OpenAI chat-completions standard, so it reuses OpenAIProvider's
+# request/response handling wholesale (the same reason Ollama does).
+#
+# The checks stay up-front and specific, before any payload is built:
+#   * no base URL   -> refuse, rather than let the OpenAI SDK fall back to api.openai.com and
+#                      send this user's data to a vendor they never named;
 #   * no model      -> "name the model", not a 400 from the endpoint;
 #   * no API key    -> the same keychain-backed message every other provider gives.
 #
-# HONESTY: `verified = False`. The OpenAI-standard request shape is implemented and tested against
-# a scripted server, but no live Muse Spark endpoint has been called from this build, so the UI
-# badges it "experimental" — same rule as the other four providers (CLAUDE.md).
+# HONESTY: `verified = False`. The request/response shape is implemented and exercised against a
+# scripted OpenAI-compatible server (observed working). `api.meta.ai` resolves and answers
+# `/v1/models` with HTTP 401 — i.e. it is reachable and wants a credential — but no authenticated
+# call has been made from this build, so the UI badges it "experimental" (CLAUDE.md).
 
 from __future__ import annotations
 
@@ -31,19 +37,21 @@ class MuseSparkProvider(OpenAIProvider):
     """A custom OpenAI-compatible endpoint: you supply the URL, the key, and the model."""
 
     type_name = "muse_spark"
-    display_name = "Muse Spark (custom OpenAI-compatible endpoint)"
-    default_model = ""  # no default: the endpoint's models are not knowable from here
+    display_name = "Muse Spark (OpenAI-compatible endpoint)"
+    default_base_url = "https://api.meta.ai/v1"
+    default_model = "muse-spark-1.2"
     needs_api_key = True
     supports_custom_endpoint = True
     supports_web_search = False
     verified = False
 
     setup_hint = (
-        "Muse Spark uses the OpenAI API standard. Fill in all three:\n"
-        "  • Base URL — the endpoint's OpenAI-compatible root, e.g. "
-        "https://api.musespark.ai/v1\n"
-        "  • API key — stored in your OS keychain, never in the project file\n"
-        "  • Model — the model id the endpoint serves, e.g. muse-spark-meta"
+        "Muse Spark uses the OpenAI API standard.\n"
+        "  • Base URL — prefilled with https://api.meta.ai/v1. Replace it with any other "
+        "OpenAI-compatible endpoint (your own gateway, a self-hosted server) — no code change "
+        "needed.\n"
+        "  • Model — prefilled with muse-spark-1.2; change it to whatever your endpoint serves.\n"
+        "  • API key — stored in your OS keychain, never in the project file."
     )
 
     def _client(self) -> Any:
@@ -53,7 +61,7 @@ class MuseSparkProvider(OpenAIProvider):
         if not self.base_url:
             raise LLMError(
                 "Muse Spark needs its endpoint URL. Add it under Base URL in "
-                "Settings ▸ Data Buddy (e.g. https://api.musespark.ai/v1)."
+                f"Settings ▸ Data Buddy (the default is {self.default_base_url})."
             )
         if not self.model:
             raise LLMError(

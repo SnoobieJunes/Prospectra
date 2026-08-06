@@ -9,9 +9,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from prospectra.core.connectors.files import _READERS
 from prospectra.core.flow.graph import FlowGraph
+from prospectra.core.mapping.doc import MappingDoc
 
 
 def flow_readable(origin: str) -> bool:
@@ -32,4 +34,23 @@ def flow_from_columns(
     output = graph.add_node("output", {"path": str(out_path), "format": "csv"}, pos=(480.0, 60.0))
     graph.add_edge(source, select)
     graph.add_edge(select, output)
+    return graph
+
+
+# 2026-07-31 (P7): the guided "Map to…" action. Same principle as flow_from_columns: the mapper
+# could quietly run its SELECT, but then the user would own a dataset with no record of where it
+# came from. Instead the action WRITES A FLOW — visible on the canvas, editable, re-runnable,
+# saved with the project, runnable headless.
+def flow_with_mapping(
+    source_path: Path | str, doc: MappingDoc | dict[str, Any], out_path: Path | str
+) -> FlowGraph:
+    """Input(file) → Map Fields(doc) → Output(csv): the flow a guided mapping stands for."""
+    doc_dict = doc.to_dict() if isinstance(doc, MappingDoc) else dict(doc)
+    MappingDoc.from_dict(doc_dict).validate()  # a broken doc must fail HERE, not on first run
+    graph = FlowGraph()
+    source = graph.add_node("input_file", {"path": str(source_path)}, pos=(40.0, 60.0))
+    mapper = graph.add_node("map_fields", {"doc": doc_dict}, pos=(260.0, 60.0))
+    output = graph.add_node("output", {"path": str(out_path), "format": "csv"}, pos=(480.0, 60.0))
+    graph.add_edge(source, mapper)
+    graph.add_edge(mapper, output)
     return graph

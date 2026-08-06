@@ -1,7 +1,11 @@
+# 2026-07-31 (P7): `_get` now goes through core/http's `send()` — one HTTP path for the whole app.
+# That refactor killed a real bug: `RestMapping.headers` was declared, serialized, and deserialized
+# but never sent (the old `_get` passed only the auth headers). It also gives every mapping an
+# optional per-host rate limit, and a public `sample_page()` so callers stop reaching into `_get`.
 # 2026-07-14 (P6): The REST client — walks a mapping's pagination and yields records.
 #
-# httpx is constructed with an injectable transport, which is how the whole paginator is tested
-# against scripted APIs (page / offset / cursor / Link-header) with no network in CI.
+# The transport is injectable, which is how the whole paginator is tested against scripted APIs
+# (page / offset / cursor / Link-header) with no network in CI.
 #
 # Two guards that exist because a paginator without them is a footgun aimed at someone else's API:
 #   * max_pages and max_records are hard stops. An API that always returns a "next" cursor (they
@@ -12,6 +16,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -20,11 +25,13 @@ from typing import Any
 from prospectra.core.connectors.base import ConnectorError
 from prospectra.core.connectors.rest import paths
 from prospectra.core.connectors.rest.mapping import RestMapping
+from prospectra.core.http.request import HttpRequest
+from prospectra.core.http.send import send
+from prospectra.core.scraper.rate_limit import RateLimiter
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 30.0
-USER_AGENT = "Prospectra/0.1 (+https://github.com/SnoobieJunes/Prospectra)"
 
 
 @dataclass
@@ -45,42 +52,19 @@ class RestClient:
         *,
         transport: Any = None,  # httpx.BaseTransport — injected by tests
         timeout: float = DEFAULT_TIMEOUT,
+        limiter: RateLimiter | None = None,
     ) -> None:
-        import httpx
-
         mapping.validate()
         self.mapping = mapping
         self._secret = secret
+        self._transport = transport
+        self._timeout = timeout
+        # A mapping that declares a rate gets one even if the caller didn't pass a limiter —
+        # politeness must not depend on every call site remembering to be polite.
+        if limiter is None and mapping.rate_limit_per_sec > 0:
+            limiter = RateLimiter(min_interval=1.0 / mapping.rate_limit_per_sec)
+        self._limiter = limiter
         self._last_headers: dict[str, str] = {}
-        self._client = httpx.Client(
-            transport=transport,
-            timeout=timeout,
-            follow_redirects=True,
-            headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
-        )
-
-    # -- auth -----------------------------------------------------------------------------------
-
-    def _auth_headers(self) -> dict[str, str]:
-        auth = self.mapping.auth
-        if auth.kind == "none" or self._secret is None:
-            return {}
-        if auth.kind == "bearer":
-            return {"Authorization": f"Bearer {self._secret}"}
-        if auth.kind == "basic":
-            import base64
-
-            token = base64.b64encode(f"{auth.user}:{self._secret}".encode()).decode()
-            return {"Authorization": f"Basic {token}"}
-        if auth.kind == "header":
-            return {auth.header: self._secret}
-        return {}
-
-    def _auth_params(self) -> dict[str, str]:
-        auth = self.mapping.auth
-        if auth.kind == "query" and self._secret is not None:
-            return {auth.param: self._secret}
-        return {}
 
     def _requires_secret(self) -> bool:
         return self.mapping.auth.kind != "none"
@@ -88,33 +72,35 @@ class RestClient:
     # -- fetching ---------------------------------------------------------------------------------
 
     def _get(self, url: str, params: dict[str, Any]) -> Any:
-        import httpx
-
-        try:
-            response = self._client.request(
-                self.mapping.method,
-                url,
-                # `params={}` does not mean "no params" to httpx — it means "replace the query
-                # string with nothing", which silently strips the ?page=2 off a next-link the
-                # server just handed us. The Link paginator then re-fetched page 1 forever. Pass
-                # None when there is nothing to add, so a URL's own query survives.
-                params=params or None,
-                headers=self._auth_headers(),
-            )
-        except httpx.HTTPError as exc:
-            raise ConnectorError(f"Could not reach {url}: {exc}") from exc
-        if response.status_code in (401, 403):
+        request = HttpRequest(
+            method=self.mapping.method,
+            url=url,
+            headers={"Accept": "application/json", **self.mapping.headers},
+            params={key: str(value) for key, value in params.items()},
+            body_kind=self.mapping.body_kind,
+            body=self.mapping.body,
+            auth=self.mapping.auth,
+            timeout=self._timeout,
+        )
+        response = send(request, self._secret, transport=self._transport, limiter=self._limiter)
+        if response.error:
+            raise ConnectorError(f"Could not reach {url}: {response.error}")
+        if response.status in (401, 403):
             raise ConnectorError(
-                f"{url} returned HTTP {response.status_code} — the API rejected the credential. "
+                f"{url} returned HTTP {response.status} — the API rejected the credential. "
                 "Check the token in the mapping's auth settings."
             )
-        if response.status_code >= 400:
-            raise ConnectorError(f"{url} returned HTTP {response.status_code}")
+        if response.status >= 400:
+            raise ConnectorError(f"{url} returned HTTP {response.status}")
+        self._last_headers = response.headers
         try:
-            self._last_headers = dict(response.headers)
-            return response.json()
+            return json.loads(response.text)
         except ValueError as exc:
             raise ConnectorError(f"{url} did not return JSON") from exc
+
+    def sample_page(self) -> Any:
+        """One page, unpaginated — what the mapping tool infers columns from."""
+        return self._get(self.mapping.url, dict(self.mapping.params))
 
     def records(self) -> tuple[list[Any], FetchReport]:
         """Every record the mapping's pagination reaches, up to its caps."""
@@ -148,10 +134,14 @@ class RestClient:
         return collected, report
 
     def _pages(self) -> Iterator[Any]:
-        """Yield each page's parsed body, walking whichever pagination the mapping declares."""
+        """Yield each page's parsed body, walking whichever pagination the mapping declares.
+
+        Auth is applied inside `send()` (headers *and* query params), so the page parameters
+        assembled here are purely the pagination's own.
+        """
         mapping = self.mapping
         page_cfg = mapping.pagination
-        base_params: dict[str, Any] = {**mapping.params, **self._auth_params()}
+        base_params: dict[str, Any] = dict(mapping.params)
 
         if page_cfg.kind == "none":
             yield self._get(mapping.url, base_params)
@@ -209,4 +199,4 @@ class RestClient:
         return None
 
     def close(self) -> None:
-        self._client.close()
+        """Kept for API compatibility — connections are now per-request inside `send()`."""

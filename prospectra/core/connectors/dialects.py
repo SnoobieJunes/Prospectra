@@ -40,8 +40,19 @@ class Field:
     # escaped, because a password containing "@" or "/" must not be able to restructure the URL.
     path_like: bool = False
 
+    # 2026-08-05: the P6 fix below was only half a fix — it kept `/` and `:` safe but not `\`, so
+    # on WINDOWS every separator in "C:\Users\me\sales.db" still became %5C and the exact failure
+    # described above happened anyway: SQLAlchemy created an empty database at that literal name,
+    # reported a healthy connection, and every query then said "Table orders not found". Windows
+    # CI had been red on this since P6.
+    # Path-like values are normalized to POSIX separators first — the same rule
+    # `prospectra.core.sqlutil.path_lit` already applies for SQL, and SQLite/SQLAlchemy accept
+    # forward slashes on Windows. Only path-like fields are touched: a password containing a
+    # backslash keeps it, and is still fully escaped.
     def quote_value(self, value: str) -> str:
-        return quote(value, safe="/:") if self.path_like else quote_plus(value, safe="")
+        if not self.path_like:
+            return quote_plus(value, safe="")
+        return quote(value.replace("\\", "/"), safe="/:")
 
 
 @dataclass(frozen=True)

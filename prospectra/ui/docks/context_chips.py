@@ -9,9 +9,10 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QMimeData, Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QWidget
 
+from prospectra.ui.dnd.drop_target import DropTargetMixin
 from prospectra.ui.dnd.mime import read_column, read_dataset, read_finding
 
 
@@ -41,8 +42,10 @@ class Chip(QFrame):
         layout.addWidget(close)
 
 
-class ChipBar(QWidget):
-    """The strip of chips above the chat input; also the dock's drop target."""
+class ChipBar(DropTargetMixin, QWidget):
+    """The strip of chips above the chat input; also the dock's drop target.
+
+    2026-07-31 (P7): drop plumbing moved to DropTargetMixin."""
 
     changed = Signal()
 
@@ -89,7 +92,15 @@ class ChipBar(QWidget):
         lines = "\n".join(f"- {chip.context}" for chip in self._chips)
         return f"Context I am asking about:\n{lines}\n\n"
 
-    # -- drops ---------------------------------------------------------------------------------
+    # -- drops (protocol in DropTargetMixin) ---------------------------------------------------
+
+    def _decode_drop(self, mime: QMimeData) -> QMimeData | None:
+        if read_column(mime) or read_dataset(mime) or read_finding(mime):
+            return mime  # the payload is whichever of the three kinds decodes; chip() dispatches
+        return None
+
+    def _payload_dropped(self, mime: QMimeData) -> None:
+        self.payload_chip(mime)
 
     def payload_chip(self, mime) -> Chip | None:
         column = read_column(mime)
@@ -114,16 +125,3 @@ class ChipBar(QWidget):
                 f"({finding.effect_name} = {finding.effect:.2f}, q = {finding.q_value:.2g})",
             )
         return None
-
-    def dragEnterEvent(self, event) -> None:
-        mime = event.mimeData()
-        if read_column(mime) or read_dataset(mime) or read_finding(mime):
-            event.acceptProposedAction()
-        else:
-            event.ignore()
-
-    def dropEvent(self, event) -> None:
-        if self.payload_chip(event.mimeData()) is not None:
-            event.acceptProposedAction()
-        else:
-            event.ignore()

@@ -18,6 +18,7 @@ def test_main_window_constructs(qtbot):
         "Data",
         "Analyze",
         "Dashboards",
+        "API",  # 2026-07-31 (P7): the playground workspace
     ]
     dock_names = {d.objectName() for d in window.findChildren(QDockWidget)}
     assert {"dock_sources", "dock_buddy", "dock_log"} <= dock_names

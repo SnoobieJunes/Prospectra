@@ -43,6 +43,23 @@ def main(argv: list[str] | None = None) -> int:
     run_flow = sub.add_parser("run-flow", help="Run a saved prep flow headless")
     run_flow.add_argument("project", help="Path to a .prospectra project file")
     run_flow.add_argument("flow", help="Flow name or id")
+    # 2026-07-31 (P7): a flow containing a live write (REST) refuses to run without --allow-writes
+    # — it exits 2 and names the node. Silently skipping it would be worse: the user believes the
+    # flow ran. --dry-run rehearses every output (counts, validates, sends nothing).
+    run_flow.add_argument(
+        "--allow-writes",
+        action="store_true",
+        help="Permit output nodes that write to external systems (live API writes)",
+    )
+    run_flow.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Rehearse every output: count and validate, write nothing",
+    )
+    run_flow.add_argument(
+        "--failures-csv",
+        help="Write failed rows (index, key, status, message) to this CSV for manual recovery",
+    )
 
     scrape = sub.add_parser("scrape", help="Scrape a web page's tables into CSV files")
     scrape.add_argument("url", help="Page URL (http/https), or a local .html file to re-parse")
@@ -58,6 +75,26 @@ def main(argv: list[str] | None = None) -> int:
         "connectors", help="List every connector, database dialect, and LLM provider + its status"
     )
 
+    # 2026-07-31 (P7): replay a saved playground request headless. file:// URLs are served from
+    # disk, which is how CI exercises the whole send path with no network.
+    api_send = sub.add_parser("api-send", help="Send a saved HTTP request and print the response")
+    api_send.add_argument("request", help="Path to a request .json saved from the API playground")
+    api_send.add_argument(
+        "--secret-ref", help="OS-keychain entry holding the request's auth credential"
+    )
+
+    # 2026-07-31 (P7): the field mapper, headless — apply a saved mapping document to a file.
+    map_cmd = sub.add_parser("map", help="Apply a field-mapping document to a dataset")
+    map_cmd.add_argument("--source", required=True, help="Input data file (CSV/JSON/Parquet…)")
+    map_cmd.add_argument("--doc", required=True, help="MappingDoc .json")
+    map_cmd.add_argument("--out", required=True, help="Output .csv path")
+
+    suggest = sub.add_parser(
+        "suggest-map", help="Suggest source→target column matches between two datasets"
+    )
+    suggest.add_argument("--source", required=True, help="Source data file")
+    suggest.add_argument("--target", required=True, help="Target data file (its columns)")
+
     gen = sub.add_parser(
         "generate-example", help="Write the synthetic ice-cream tutorial dataset (seeded)"
     )
@@ -70,11 +107,19 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "scan":
         return _scan(args.path, args.target, args.max_rows, args.seed, args.alpha, args.pca)
     if args.command == "run-flow":
-        return _run_flow(args.project, args.flow)
+        return _run_flow(
+            args.project, args.flow, args.allow_writes, args.dry_run, args.failures_csv
+        )
     if args.command == "scrape":
         return _scrape(args.url, args.out, args.tables_only, args.max_tables)
     if args.command == "connectors":
         return _connectors()
+    if args.command == "api-send":
+        return _api_send(args.request, args.secret_ref)
+    if args.command == "map":
+        return _map(args.source, args.doc, args.out)
+    if args.command == "suggest-map":
+        return _suggest_map(args.source, args.target)
     if args.command == "generate-example":
         from prospectra.example_data import write_csv
 
@@ -195,6 +240,194 @@ def _scrape(url: str, out: str, tables_only: bool, max_tables: int | None) -> in
     return 0
 
 
+# 2026-07-31 (P7): the playground's headless twin — load a request document, send it, print what
+# came back. Non-2xx is *printed as a result* (that is the playground's contract) but exits 1 so
+# scripts can branch on success; a transport failure also exits 1 with the error stated.
+def _api_send(request_path: str, secret_ref: str | None) -> int:
+    import json
+
+    from prospectra.core.http import HttpRequest, redact_headers, send
+
+    try:
+        doc = json.loads(Path(request_path).read_text(encoding="utf-8"))
+        request = HttpRequest.from_dict(doc)
+        request.validate()
+    except (OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    secret = None
+    if secret_ref:
+        from prospectra.core.llm import secrets as secret_store
+
+        try:
+            secret = secret_store.get_api_key(secret_ref)
+        except secret_store.SecretsError as exc:
+            print(f"error: could not read the keychain: {exc}", file=sys.stderr)
+            return 1
+        if not secret:
+            print(f"error: no keychain entry named {secret_ref!r}", file=sys.stderr)
+            return 1
+
+    response = send(request, secret)
+    if response.error:
+        print(f"error: {response.error}", file=sys.stderr)
+        return 1
+
+    print(
+        f"HTTP {response.status} {response.reason}  "
+        f"({response.elapsed_ms:.0f} ms, {response.size_bytes:,} bytes)"
+    )
+    for name, value in redact_headers(response.headers).items():
+        print(f"  {name}: {value}")
+    if response.text:
+        print()
+        print(response.text)
+    return 0 if response.ok else 1
+
+
+# 2026-07-31 (P7): file -> reader SQL, shared by `map` and `suggest-map`.
+def _file_rel(path_str: str) -> str:
+    from prospectra.core.connectors.files import _READERS
+    from prospectra.core.sqlutil import path_lit
+
+    path = Path(path_str)
+    reader = _READERS.get(path.suffix.lower())
+    if reader is None or not path.is_file():
+        raise ValueError(f"cannot read {path} (supported: {', '.join(sorted(_READERS))})")
+    return f"(SELECT * FROM {reader}({path_lit(path)}))"
+
+
+def _map(source: str, doc_path: str, out: str) -> int:
+    import json
+
+    import duckdb
+
+    from prospectra.core.mapping import (
+        MappingDoc,
+        coercion_check_sql,
+        compile_notes,
+        compile_select,
+    )
+    from prospectra.core.sqlutil import path_lit
+
+    try:
+        doc = MappingDoc.from_dict(json.loads(Path(doc_path).read_text(encoding="utf-8")))
+        rel = _file_rel(source)
+    except (OSError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    # 2026-08-05: the CLI materializes file-backed crosswalks the same way the flow node does.
+    # It never did, so `map` with a crosswalk FILE died on "Table with name xwalk_… does not
+    # exist" — half the crosswalk feature worked only inside the GUI, contra the project's rule
+    # that engine features get headless coverage.
+    from prospectra.core.flow.nodes.map_fields import MapFieldsNode
+
+    node = MapFieldsNode({"doc": doc.to_dict()})
+
+    con = duckdb.connect()
+    try:
+        try:
+            node.prepare(con)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        described = con.execute(f"DESCRIBE SELECT * FROM {rel} LIMIT 0").fetchall()
+        available = [str(r[0]) for r in described]
+        try:
+            sql = compile_select(doc, rel, available=available)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        out_path = Path(out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        row = con.execute(f"COPY ({sql}) TO {path_lit(out_path)} (FORMAT CSV, HEADER)").fetchone()
+        written = int(row[0]) if row else 0
+        print(f"wrote {out_path} ({written} rows)")
+
+        # Nothing is silent: report every value the chain lost and every crosswalk miss.
+        check_sql = coercion_check_sql(doc, rel)
+        if check_sql:
+            counts = con.execute(check_sql).fetchone()
+            names = [str(d[0]) for d in con.description or []]
+            for name, count in zip(names, counts or (), strict=False):
+                if not count:
+                    continue
+                target, _sep, kind = name.partition("__")
+                if kind.startswith("unmatched"):
+                    print(f"  note: {count} row(s) had no translation for {target}")
+                elif kind.startswith("lost_"):
+                    print(
+                        f"  note: {count} row(s) could not be read by the "
+                        f"{kind[len('lost_') :]} step of {target}"
+                    )
+                else:
+                    print(f"  note: {count} row(s) could not be read as {target}")
+        # The node's own confessions (truncated/deduped/blank-key crosswalks) reach the terminal
+        # too — they used to exist only on the object and be read by nothing.
+        for note in [*node.prepare_notes, *compile_notes(doc)]:
+            print(f"  note: {note}")
+    except duckdb.Error as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        con.close()
+    return 0
+
+
+def _suggest_map(source: str, target: str) -> int:
+    import duckdb
+
+    from prospectra.core.mapping import suggest_from_values, suggest_matches
+
+    con = duckdb.connect()
+    try:
+        try:
+            source_rel, target_rel = _file_rel(source), _file_rel(target)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        source_cols = [
+            (str(r[0]), str(r[1]))
+            for r in con.execute(f"DESCRIBE SELECT * FROM {source_rel} LIMIT 0").fetchall()
+        ]
+        target_cols = [
+            (str(r[0]), str(r[1]))
+            for r in con.execute(f"DESCRIBE SELECT * FROM {target_rel} LIMIT 0").fetchall()
+        ]
+
+        by_name = suggest_matches(source_cols, target_cols)
+        print("\nBY NAME (accept, correct, or ignore — nothing is applied for you)")
+        if not by_name:
+            print("  no name-based matches cleared the confidence bar")
+        for s in by_name:
+            print(f"  {s.source:<24} -> {s.target:<24} {s.confidence:>5.0%}  {s.reason}")
+
+        # Values for what names couldn't settle: every still-unmatched source/target pair.
+        matched_sources = {s.source for s in by_name}
+        matched_targets = {s.target for s in by_name}
+        pairs = [
+            (sc, tc)
+            for sc, _ in source_cols
+            if sc not in matched_sources
+            for tc, _ in target_cols
+            if tc not in matched_targets
+        ][:400]
+        by_values = suggest_from_values(con, source_rel, target_rel, pairs)
+        if by_values:
+            print("\nBY VALUES (names disagree, the data does not)")
+            for s in by_values:
+                print(f"  {s.source:<24} -> {s.target:<24} {s.confidence:>5.0%}  {s.reason}")
+        print()
+    except duckdb.Error as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        con.close()
+    return 0
+
+
 def _connectors() -> int:
     from prospectra.core.connectors import (
         DIALECTS,
@@ -251,7 +484,13 @@ def _connectors() -> int:
     return 0
 
 
-def _run_flow(project_path: str, flow_ref: str) -> int:
+def _run_flow(
+    project_path: str,
+    flow_ref: str,
+    allow_writes: bool = False,
+    dry_run: bool = False,
+    failures_csv: str | None = None,
+) -> int:
     from prospectra.core.flow import FlowError, FlowGraph, FlowRunner
     from prospectra.core.project import ProjectStore, ProjectStoreError
 
@@ -269,16 +508,63 @@ def _run_flow(project_path: str, flow_ref: str) -> int:
             return 1
         try:
             graph = FlowGraph.from_doc(matches[0].doc)
-            results = FlowRunner().run(graph)
+        except FlowError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+
+        # 2026-07-31 (P7): pre-flight — a live write needs explicit consent BEFORE anything runs.
+        # Exit 2, naming the node: silently skipping it would leave the user believing it ran.
+        if not allow_writes and not dry_run:
+            for node_id in graph.output_nodes():
+                node = graph.nodes[node_id].node
+                if node.destructive:
+                    print(
+                        f"refused: node {node_id} ({node.display_name}) sends live writes to an "
+                        "external system.\nNothing was run. Re-run with --allow-writes to mean "
+                        "it, or --dry-run to rehearse.",
+                        file=sys.stderr,
+                    )
+                    return 2
+
+        try:
+            results = FlowRunner().run(graph, allow_writes=allow_writes, dry_run=dry_run)
         except FlowError as exc:
             print(f"error: {exc}", file=sys.stderr)
             return 1
         if not results:
             print("error: flow has no Output nodes — nothing to run", file=sys.stderr)
             return 1
+        failed = False
         for result in results:
-            print(f"wrote {result.path} ({result.rows} rows)")
-        return 0
+            if result.dry_run:
+                print(f"dry run: {result.path or result.node_id} ({result.attempted} rows)")
+            elif result.path:
+                print(f"wrote {result.path} ({result.rows} rows)")
+            else:
+                print(f"{result.node_id}: {result.written} written, {result.failed} failed")
+            # notes and failures reach the terminal — they must never die in a logger.
+            for note in result.notes:
+                print(f"  note: {note}")
+            for failure in result.failures[:20]:
+                print(
+                    f"  failed row {failure.index} ({failure.key or 'no key'}): "
+                    f"HTTP {failure.status} {failure.message}"
+                )
+            if len(result.failures) > 20:
+                print(f"  … and {len(result.failures) - 20} more failed row(s)")
+            failed = failed or result.failed > 0
+        if failures_csv and any(r.failures for r in results):
+            from prospectra.core.http.write import write_failures_csv
+
+            merged = results[0]
+            for extra in results[1:]:
+                merged.failures.extend(extra.failures)
+            written_csv = write_failures_csv(merged, failures_csv)
+            print(
+                f"failed rows written to {written_csv} — fix the cause, then re-run just those "
+                "keys (the node's 'Only these keys' setting). Resume is manual."
+            )
+        return 1 if failed else 0
     finally:
         store.close()
 

@@ -48,7 +48,18 @@ Repo: https://github.com/SnoobieJunes/Prospectra
   macOS bundle was built and launched. Everything except SQLite is badged experimental.
 - Also P6: **Muse Spark** LLM provider — a user-supplied OpenAI-compatible endpoint (URL + key +
   model, all three required).
-- All phases P0-P6 delivered. Remaining known gaps are in Deviations.md (JS-rendered scraping,
+- P7 (API playground + field mapper + destinations: `core/http` with one `send()` for the whole
+  app, playground tab + `api-send` CLI, descriptor-driven transform vocabulary + `MappingDoc` +
+  compiler with loss counters, `map`/`suggest-map` CLI, Map Fields flow node with full-panel
+  drag-and-drop mapper, generalized `Node.write()` with `WriteReport`, local DuckDB-file
+  destination, REST write behind four guards) — done 2026-07-31, **hardened 2026-08-05** after four
+  adversarial reviews found ~40 defects including an arbitrary-SQL hole reachable from a shared
+  project file. All significant findings are fixed and locked by tests that fail against the
+  previous code; the open ones are listed in Deviations.md. Proven end to end: a mapped vendor CSV
+  was PUT row-by-row at a **scripted local endpoint** (refusal → dry run → live run, the 400
+  attributed to its row, failures CSV written), and `api-send` got a live 200 from the **real
+  GitHub API**. Plan: `docs/i-want-to-add-purrfect-reddy.md`.
+- All phases P0-P7 delivered. Remaining known gaps are in Deviations.md (JS-rendered scraping,
   LLM-assisted extraction, PCA biplot, flow undo stack, free-form dashboard layout).
 
 ### Connector rules (do not regress these)
@@ -57,6 +68,13 @@ Repo: https://github.com/SnoobieJunes/Prospectra
 - **A path is not a credential.** `Field.path_like` decides the quoting: paths keep their separators,
   everything else is fully escaped. Escaping a SQLite path's slashes made SQLAlchemy *silently create
   an empty database* and report a good connection — found by running the acceptance path, not a test.
+  **This includes the Windows separator.** The P6 fix kept `/` and `:` safe but not `\`, so
+  `C:\data\sales.db` still became `%5C…` and did the exact same silent-empty-database thing on the
+  one platform the testers use — Windows CI was red on it from P6 until 2026-08-05. Path-like values
+  are normalized to POSIX separators before quoting (the `path_lit` rule, applied to URLs), and the
+  regression test hands the quoter a backslash path directly so it fails on **every** OS, not just
+  on Windows CI. A test that only reproduces on the platform you do not develop on is a test that
+  will sit red.
 - **A missing SQLite file is an error**, because SQLite would otherwise create an empty one and the
   user would see a healthy connection with no tables.
 - **Passwords never reach the project file.** `redact_url()` strips them; the real secret goes to the
@@ -85,6 +103,50 @@ Repo: https://github.com/SnoobieJunes/Prospectra
   identifiers; values are left alone.
 - **Page furniture is not data.** Tables under 2 rows or 2 columns are dropped — a live scrape
   emitted the page's map *legend* as a dataset until that floor existed.
+
+### Verification rules (learned the hard way, P7)
+- **A green suite is not evidence.** P7 shipped 388 passing tests with a critical injection hole, a
+  paginator regression, and two silent-data-corruption bugs in it. Tests written by the same pass
+  that wrote the code encode its assumptions. Attack the code from outside it before claiming it
+  works.
+- **A regression test must fail against the old code first.** The P7 lock for "empty params must
+  not strip the query string" passed while the real bug (NON-empty params) shipped.
+- **Never write a comment asserting behaviour you have not exercised.** P7 comments claimed the UI
+  read notes it never read, that runs never block the GUI thread while the mapper blocked it, and
+  that value-based suggestions ran where they did not. Those comments then became the "evidence"
+  in a status report. Describe what you ran, not what you intended.
+- **Import each new module on a cold interpreter.** A circular import in `core/http/write.py` was
+  invisible to the suite because the tests imported `core.flow` first.
+- **Exercise the CLI path, not just the library call.** `prospectra map` was broken for file-backed
+  crosswalks for as long as the feature existed, because only the flow node was tested.
+
+### HTTP & write rules (do not regress these)
+- **One `send()` for the whole app** (`core/http/send.py`): playground, REST paginator, and the
+  write path. It NEVER raises — a 404 with a helpful body is a result to display; transport
+  failure is an `HttpResponse.error`. `params or None` is load-bearing: `params={}` tells httpx
+  to strip a URL's own query string, which once made the Link paginator re-fetch page 1 forever.
+- **A live write cannot happen by accident.** Four guards ship together and none suffices alone:
+  `Node.destructive`, `FlowRunner.run(allow_writes=…, dry_run=…)` refusing up front (before ANY
+  output runs), `run-flow` exiting 2 and NAMING the node without `--allow-writes`, and the UI's
+  dry-run-first + typed-WRITE confirmation. `push_rows` dry_run default is True and issues ZERO
+  requests.
+- **Retry only on 429/5xx, honouring Retry-After — never on other 4xx.** A wrong request
+  re-sent is hammering. Circuit breaker: 5 consecutive failures stop the run and say so; the
+  1,000-row cap confesses what it did not attempt. per_row is the default mode because a 400
+  attributable to a SPECIFIC row is the product for a non-technical user.
+- **`WriteReport.notes` (and every report's notes) must reach the UI/CLI** — a note that dies
+  in a logger violates this file's own rule.
+- **No raw SQL is ever typed in the mapper.** `coerce_args` is the injection boundary — every
+  int is coerced, every choice is closed, every string goes through `str_lit`, and the ONE
+  escape hatch (`expression`) is status="advanced", behind a disclosure, never suggested.
+  `ParamsEditor` must never fall through to QLineEdit for unknown param kinds (it once
+  `str(dict)`'d structured params and wrote the repr back — data loss).
+- **`ParamField.default` must never be mutable** — `Node.__init__` shares defaults by
+  reference; two nodes on one canvas would edit each other. Use `None` and normalize in
+  `__init__` (see MapFieldsNode).
+- **Nothing the mapper loses is silent**: `coercion_check_sql` counts rows that went in
+  readable and came out NULL per field, and crosswalk misses per lookup step; truncated inline
+  crosswalks are stated in `compile_notes`.
 
 ### Chart rules (do not regress these)
 - **A dual-axis chart is unrepresentable, not merely discouraged**: `ChartSpec` has one `y` and one

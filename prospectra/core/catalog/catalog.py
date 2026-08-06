@@ -157,6 +157,11 @@ class Catalog:
             if report is not None
             else f"api: {mapping.url}"
         )
+        # 2026-07-31 (P7): the report's confessions ("stopped at the cap — there may be more")
+        # ride on the dataset's origin, which the UI shows. A note that dies in a logger
+        # violates the project's own rule.
+        if report is not None and report.notes:
+            detail += " — " + "; ".join(report.notes)
         ds = Dataset(id=uuid.uuid4().hex, name=mapping.name, view_name=view, origin=detail)
         self.datasets[ds.id] = ds
         logger.info("Opened API dataset %s from %s", mapping.name, mapping.url)

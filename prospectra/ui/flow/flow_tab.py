@@ -24,8 +24,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import prospectra.ui.mapping  # noqa: F401  (2026-07-31 P7: registers the mapping_doc editor)
 from prospectra.core.flow import NODE_TYPES, FlowError, FlowGraph, FlowRunner
-from prospectra.core.flow.runner import OutputResult, PreviewResult
+from prospectra.core.flow.runner import OutputResult, PreviewResult, SelectPreview
 from prospectra.core.stats import TableProfile
 from prospectra.ui.flow.canvas import FlowScene, FlowView
 from prospectra.ui.flow.params_editor import ParamsEditor
@@ -91,6 +92,7 @@ class FlowTab(QWidget):
         preview.clicked.connect(lambda: self._preview_node(self._selected or ""))
         run = QPushButton("Run flow")
         run.clicked.connect(self._run_flow)
+        self._run_button = run  # disabled while a run is in flight (see _run_flow)
         bar.addWidget(self._node_picker)
         bar.addWidget(add)
         bar.addSpacing(12)
@@ -107,6 +109,8 @@ class FlowTab(QWidget):
         layout = QVBoxLayout(rail)
         layout.setContentsMargins(0, 0, 0, 0)
         self._params = ParamsEditor()
+        # 2026-07-31 (P7): custom param editors (the mapper) reach flow services through here.
+        self._params.host = self
         layout.addWidget(self._params, 1)
         layout.addWidget(QLabel("Changes"))
         self._changes = QListWidget()
@@ -146,6 +150,10 @@ class FlowTab(QWidget):
         self._show_status(f"Added “{dataset}” as an Input node — connect a step to it.")
 
     def _graph_changed(self) -> None:
+        # 2026-08-05: the runner's schema cache is keyed on compiled SQL, which cannot see a
+        # source FILE changing underneath it. Clearing on every graph edit keeps the mapper's
+        # draggable column list from serving a stale schema for the rest of the session.
+        self._runner.clear_caches()
         self._refresh_changes()
         self._scene.refresh_edges()
         for item in self._scene._nodes.values():
@@ -216,16 +224,84 @@ class FlowTab(QWidget):
         if not self.graph.output_nodes():
             self._show_status("Add an Output node to run the flow.")
             return
+        # 2026-08-05: one run at a time. The button stayed live during a run, so double-clicking a
+        # graph with a REST-write node could start two concurrent live write jobs against the same
+        # API — and the worker reads self.graph while the canvas is still editable.
+        if not self._run_button.isEnabled():
+            return
+        self._run_button.setEnabled(False)
+        # 2026-07-31 (P7): a flow containing a live write NEVER runs from one click. The first
+        # press is a dry run; going live takes a typed confirmation naming what will happen.
+        destructive = [
+            nid for nid in self.graph.output_nodes() if self.graph.nodes[nid].node.destructive
+        ]
+        if destructive:
+            self._run_destructive(destructive)
+            return
         self._show_status("Running…")
         self._scene.mark_error(None, None)
         run_in_pool(
-            self._runner.run, self.graph, on_result=self._run_done, on_error=self._run_failed
+            self._runner.run,
+            self.graph,
+            on_result=self._run_done,
+            on_error=self._run_failed,
+            on_finished=self._run_finished,
         )
 
+    def _run_destructive(self, destructive: list[str]) -> None:
+        names = ", ".join(self.graph.nodes[nid].node.display_name for nid in destructive)
+        self._show_status(f"Dry run first — {names} sends live writes…")
+        self._scene.mark_error(None, None)
+        run_in_pool(
+            lambda: self._runner.run(self.graph, dry_run=True),
+            on_result=self._dry_run_done,
+            on_error=self._run_failed,
+            on_finished=self._run_finished,
+        )
+
+    def _dry_run_done(self, results: list[OutputResult]) -> None:
+        self._run_done(results)
+        total = sum(r.attempted for r in results if r.dry_run)
+        from PySide6.QtWidgets import QInputDialog
+
+        typed, ok = QInputDialog.getText(
+            self,
+            "Send live writes?",
+            f"The dry run rehearsed {total:,} row(s). This will now send REAL requests to an\n"
+            "external system — a wrong mapping there is not undoable from here.\n\n"
+            "Type WRITE to send, or cancel to stop after the rehearsal:",
+        )
+        if not ok or typed.strip() != "WRITE":
+            self._show_status("Stopped after the dry run — nothing was sent.")
+            return
+        self._show_status("Sending live writes…")
+        self._run_button.setEnabled(False)  # the dry run's on_finished re-enabled it
+        run_in_pool(
+            lambda: self._runner.run(self.graph, allow_writes=True),
+            on_result=self._run_done,
+            on_error=self._run_failed,
+            on_finished=self._run_finished,
+        )
+
+    def _run_finished(self) -> None:
+        self._run_button.setEnabled(True)
+
     def _run_done(self, results: list[OutputResult]) -> None:
-        written = ", ".join(f"{r.path} ({r.rows:,} rows)" for r in results)
-        self._show_status(f"Wrote {written}")
-        logger.info("Flow run complete: %s", written)
+        parts = []
+        for r in results:
+            if r.dry_run:
+                parts.append(f"dry run: {r.attempted:,} row(s) rehearsed")
+            elif r.path:
+                parts.append(f"{r.path} ({r.rows:,} rows)")
+            else:
+                parts.append(f"{r.written:,} written, {r.failed:,} failed")
+        summary = ", ".join(parts)
+        # 2026-07-31 (P7): notes reach the user, never just a logger (the project's own rule).
+        notes = [note for r in results for note in r.notes]
+        if notes:
+            summary += "  ·  " + " · ".join(notes)
+        self._show_status(summary)
+        logger.info("Flow run complete: %s", summary)
 
     def _run_failed(self, message: str) -> None:
         self._show_status("Run failed")
@@ -237,6 +313,22 @@ class FlowTab(QWidget):
 
     def _show_status(self, message: str) -> None:
         self._status.setText(message)
+
+    # -- services for custom param editors (2026-07-31 P7) ---------------------------------
+
+    def upstream_columns_for(self, node_id: str) -> list[tuple[str, str]]:
+        """The columns arriving at a node's first input — what the mapper drags from."""
+        inputs = self.graph.inputs_of(node_id)
+        if not inputs:
+            return []
+        return self._runner.columns(self.graph, inputs[0])
+
+    def preview_select_for(self, node_id: str, select_sql: str, limit: int = 20) -> SelectPreview:
+        """An ad-hoc SELECT over a node's first input (relation name `upstream`)."""
+        inputs = self.graph.inputs_of(node_id)
+        if not inputs:
+            raise FlowError("connect an input first")
+        return self._runner.preview_select(self.graph, inputs[0], select_sql, limit=limit)
 
     # -- persistence ------------------------------------------------------------------------
 
