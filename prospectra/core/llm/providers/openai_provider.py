@@ -124,11 +124,10 @@ class OllamaProvider(OpenAIProvider):
 
     type_name = "ollama"
     display_name = "Ollama (local)"
+    # 2026-08-05: the endpoint now comes from the shared descriptor (Provider.__init__ applies it),
+    # so the settings form prefills it from one place instead of each provider hand-rolling it.
+    default_base_url = "http://localhost:11434/v1"
     default_model = "llama3.1"
     needs_api_key = False
     supports_custom_endpoint = True
     verified = False
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        self.base_url = self.base_url or "http://localhost:11434/v1"

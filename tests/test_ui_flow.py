@@ -63,6 +63,95 @@ def test_params_editor_writes_back(qtbot):
     assert graph.nodes[node_id].node.params["expression"] == "sales > 10"
 
 
+# 2026-07-31 (P7): the corruption lock. The old editor fell through to QLineEdit for any kind it
+# did not know — which str(dict)'d a structured param into a text box and wrote the Python repr
+# back on the next keystroke. An unknown kind must now render NO QLineEdit at all.
+def test_an_unknown_param_kind_renders_no_line_edit(qtbot):
+    from typing import ClassVar
+
+    from PySide6.QtWidgets import QLineEdit
+
+    from prospectra.core.flow.node import NODE_TYPES, Node, ParamField
+
+    class WeirdNode(Node):
+        type_name = "weird_kind_node_p7"
+        display_name = "Weird"
+        category = "transform"
+        params_schema: ClassVar = (ParamField("blob", "Blob", "some_future_kind", None),)
+
+        def compile(self, inputs):
+            return f"SELECT * FROM {inputs[0]}"
+
+    NODE_TYPES[WeirdNode.type_name] = WeirdNode
+    try:
+        graph = FlowGraph()
+        node_id = graph.add_node("weird_kind_node_p7", {"blob": {"structured": True}})
+        editor = ParamsEditor()
+        qtbot.addWidget(editor)
+        editor.set_node(graph.nodes[node_id])
+
+        assert editor.findChildren(QLineEdit) == []  # nothing that could write a repr back
+        assert graph.nodes[node_id].node.params["blob"] == {"structured": True}
+    finally:
+        NODE_TYPES.pop(WeirdNode.type_name, None)
+
+
+def test_a_custom_editor_is_consulted_before_the_builtin_kinds(qtbot):
+    from typing import ClassVar
+
+    from PySide6.QtWidgets import QLabel
+
+    from prospectra.core.flow.node import NODE_TYPES, Node, ParamField
+    from prospectra.ui.flow.params_editor import CUSTOM_EDITORS
+
+    class CustomNode(Node):
+        type_name = "custom_kind_node_p7"
+        display_name = "Custom"
+        category = "transform"
+        params_schema: ClassVar = (ParamField("doc", "Doc", "test_custom_kind", None),)
+
+        def compile(self, inputs):
+            return f"SELECT * FROM {inputs[0]}"
+
+    NODE_TYPES[CustomNode.type_name] = CustomNode
+    CUSTOM_EDITORS["test_custom_kind"] = lambda editor, inst, field: QLabel("custom editor here")
+    try:
+        graph = FlowGraph()
+        node_id = graph.add_node("custom_kind_node_p7")
+        editor = ParamsEditor()
+        qtbot.addWidget(editor)
+        editor.set_node(graph.nodes[node_id])
+        labels = [w.text() for w in editor.findChildren(QLabel)]
+        assert "custom editor here" in labels
+    finally:
+        NODE_TYPES.pop(CustomNode.type_name, None)
+        CUSTOM_EDITORS.pop("test_custom_kind", None)
+
+
+def test_the_p7_param_kinds_have_registered_editors(qtbot):
+    """mapping_doc and write_spec render real editors — not the read-only fallback label."""
+    import prospectra.ui.mapping  # noqa: F401  (registration import)
+    from prospectra.ui.flow.params_editor import CUSTOM_EDITORS
+
+    assert "mapping_doc" in CUSTOM_EDITORS
+    assert "write_spec" in CUSTOM_EDITORS
+
+    graph = FlowGraph()
+    node_id = graph.add_node("output_rest")
+    editor = ParamsEditor()
+    qtbot.addWidget(editor)
+    editor.set_node(graph.nodes[node_id])
+
+    from PySide6.QtWidgets import QLineEdit
+
+    url_edits = editor.findChildren(QLineEdit)
+    assert url_edits  # the write-spec form rendered
+    url_edits[0].setText("https://api.test/things/{sku}")
+    assert (
+        graph.nodes[node_id].node.params["spec"]["url_template"] == "https://api.test/things/{sku}"
+    )
+
+
 def test_flow_tab_previews_and_profiles(qtbot, orders_csv):
     tab = FlowTab()
     qtbot.addWidget(tab)

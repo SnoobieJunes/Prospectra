@@ -14,7 +14,8 @@ from PySide6.QtWidgets import (
 )
 
 from prospectra.core.flow import FlowGraph, FlowGraphError, flow_readable
-from prospectra.ui.dnd.mime import read_dataset
+from prospectra.ui.dnd.drop_target import DropTargetMixin
+from prospectra.ui.dnd.mime import DatasetPayload, read_dataset
 from prospectra.ui.flow.canvas_items import EdgeItem, NodeItem
 
 
@@ -165,10 +166,12 @@ class FlowScene(QGraphicsScene):
         super().keyPressEvent(event)
 
 
-class FlowView(QGraphicsView):
+class FlowView(DropTargetMixin, QGraphicsView):
     # 2026-07-14 (P5): the canvas accepts dataset drops — closing the promise the P2 deviation made
     # ("dragging catalog datasets onto the canvas as inputs … slots into P5"). Drag a dataset from
     # the Sources tree and it becomes an Input node wired to that dataset's file.
+    # 2026-07-31 (P7): drop plumbing moved to DropTargetMixin; the flow-readable refusal (with its
+    # reason) stays here because it is this target's own business rule, not protocol.
     dataset_dropped = Signal(str, str, float, float)  # dataset name, origin, scene x, scene y
     drop_rejected = Signal(str)
 
@@ -178,27 +181,18 @@ class FlowView(QGraphicsView):
         self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
         self.setMinimumHeight(220)
         self.setAcceptDrops(True)
+        self._drop_pos = None  # scene position of the drop in flight
 
-    # -- drops -------------------------------------------------------------------------
+    # -- drops (protocol in DropTargetMixin) -----------------------------------------------
 
-    def dragEnterEvent(self, event) -> None:
-        if read_dataset(event.mimeData()) is not None:
-            event.acceptProposedAction()
-        else:
-            event.ignore()
-
-    def dragMoveEvent(self, event) -> None:
-        if read_dataset(event.mimeData()) is not None:
-            event.acceptProposedAction()
-        else:
-            event.ignore()
+    def _decode_drop(self, mime) -> DatasetPayload | None:
+        return read_dataset(mime)
 
     def dropEvent(self, event) -> None:
-        payload = read_dataset(event.mimeData())
-        if payload is None:
-            event.ignore()
-            return
-        event.acceptProposedAction()
+        self._drop_pos = self.mapToScene(event.position().toPoint())
+        super().dropEvent(event)
+
+    def _payload_dropped(self, payload: DatasetPayload) -> None:
         if not flow_readable(payload.origin):
             # An Excel sheet or a database table is not a file DuckDB's Input node can read. Say so
             # rather than dropping a node that fails the moment it runs.
@@ -207,7 +201,7 @@ class FlowView(QGraphicsView):
                 f"“{payload.dataset}” comes from {payload.origin}."
             )
             return
-        point = self.mapToScene(event.position().toPoint())
+        point = self._drop_pos or QPointF(60.0, 40.0)
         self.dataset_dropped.emit(payload.dataset, payload.origin, point.x(), point.y())
 
     def wheelEvent(self, event) -> None:

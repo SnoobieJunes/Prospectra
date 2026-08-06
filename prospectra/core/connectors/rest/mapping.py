@@ -1,3 +1,7 @@
+# 2026-07-31 (P7): schema v2 — a mapping can now carry a request body (`body_kind` + `body`, for
+# POST-search APIs) and a client-side `rate_limit_per_sec`. `Auth` moved to core/http (it is an
+# HTTP concern shared with the playground and the write path) and is re-exported here unchanged.
+# v1 documents load as before; the existing guard correctly refuses v2 in older builds.
 # 2026-07-14 (P6): The saved mapping — how one REST endpoint becomes one table.
 #
 # This is the plan's "data-mapping tool": auth + pagination + JSONPath→columns, saved as a reusable
@@ -10,12 +14,14 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
-MAPPING_SCHEMA = 1
+from prospectra.core.http.request import AUTH_KINDS, BODY_KINDS, Auth
 
-AUTH_KINDS = ("none", "bearer", "basic", "header", "query")
+MAPPING_SCHEMA = 2
+
 PAGINATION_KINDS = ("none", "page", "offset", "cursor", "link")
 
 DEFAULT_PAGE_SIZE = 100
@@ -33,34 +39,6 @@ class Column:
     @classmethod
     def from_dict(cls, doc: dict[str, Any]) -> Column:
         return cls(name=str(doc["name"]), path=str(doc["path"]))
-
-
-@dataclass
-class Auth:
-    kind: str = "none"
-    secret_ref: str = ""  # keychain entry name — NEVER the secret itself
-    user: str = ""  # basic auth username (not a secret)
-    header: str = ""  # for kind="header": the header name, e.g. "X-API-Key"
-    param: str = ""  # for kind="query": the query parameter name, e.g. "api_key"
-
-    def to_dict(self) -> dict[str, str]:
-        return {
-            "kind": self.kind,
-            "secret_ref": self.secret_ref,
-            "user": self.user,
-            "header": self.header,
-            "param": self.param,
-        }
-
-    @classmethod
-    def from_dict(cls, doc: dict[str, Any]) -> Auth:
-        return cls(
-            kind=str(doc.get("kind", "none")),
-            secret_ref=str(doc.get("secret_ref", "")),
-            user=str(doc.get("user", "")),
-            header=str(doc.get("header", "")),
-            param=str(doc.get("param", "")),
-        )
 
 
 @dataclass
@@ -119,11 +97,15 @@ class RestMapping:
     method: str = "GET"
     headers: dict[str, str] = field(default_factory=dict)
     params: dict[str, str] = field(default_factory=dict)
+    # 2026-07-31 (P7): a request body, for the APIs whose "read" is a POST with a search document.
+    body_kind: str = "none"  # none | json | text | form
+    body: str = ""
     auth: Auth = field(default_factory=Auth)
     pagination: Pagination = field(default_factory=Pagination)
     records_path: str = ""  # where the rows live, e.g. "issues" or "data.items"
     columns: list[Column] = field(default_factory=list)  # empty = flatten every top-level key
     max_records: int = 10_000
+    rate_limit_per_sec: float = 0.0  # 0 = no client-side throttle (the pre-P7 behaviour)
 
     def validate(self) -> None:
         if not self.url.strip():
@@ -140,6 +122,15 @@ class RestMapping:
             raise ValueError("query auth needs the parameter's name")
         if self.pagination.kind == "cursor" and not self.pagination.next_path:
             raise ValueError("cursor pagination needs the path to the next cursor")
+        if self.body_kind not in BODY_KINDS:
+            raise ValueError(f"unknown body kind {self.body_kind!r}")
+        if self.body_kind == "json" and self.body.strip():
+            try:
+                json.loads(self.body)
+            except ValueError as exc:
+                raise ValueError(f"the mapping's JSON body does not parse: {exc}") from exc
+        if self.rate_limit_per_sec < 0:
+            raise ValueError("rate_limit_per_sec cannot be negative")
         names = [c.name for c in self.columns]
         if len(names) != len(set(names)):
             raise ValueError("two columns share a name")
@@ -154,11 +145,14 @@ class RestMapping:
             "method": self.method,
             "headers": dict(self.headers),
             "params": dict(self.params),
+            "body_kind": self.body_kind,
+            "body": self.body,
             "auth": self.auth.to_dict(),
             "pagination": self.pagination.to_dict(),
             "records_path": self.records_path,
             "columns": [c.to_dict() for c in self.columns],
             "max_records": self.max_records,
+            "rate_limit_per_sec": self.rate_limit_per_sec,
         }
 
     @classmethod
@@ -174,9 +168,12 @@ class RestMapping:
             method=str(doc.get("method", "GET")),
             headers=dict(doc.get("headers", {})),
             params=dict(doc.get("params", {})),
+            body_kind=str(doc.get("body_kind", "none")),
+            body=str(doc.get("body", "")),
             auth=Auth.from_dict(doc.get("auth", {})),
             pagination=Pagination.from_dict(doc.get("pagination", {})),
             records_path=str(doc.get("records_path", "")),
             columns=[Column.from_dict(c) for c in doc.get("columns", [])],
             max_records=int(doc.get("max_records", 10_000)),
+            rate_limit_per_sec=float(doc.get("rate_limit_per_sec", 0.0)),
         )

@@ -69,6 +69,7 @@ class BuddySettingsDialog(QDialog):
         form.addRow("Provider", self._provider)
 
         self._model = QLineEdit(self._current.model)
+        self._model.setToolTip("Editable — whatever model id your endpoint serves.")
         form.addRow("Model", self._model)
 
         self._key = QLineEdit()
@@ -77,7 +78,10 @@ class BuddySettingsDialog(QDialog):
         form.addRow("API key", self._key)
 
         self._base_url = QLineEdit(self._current.base_url)
-        self._base_url.setPlaceholderText("http://localhost:11434/v1")
+        self._base_url.setToolTip(
+            "Editable — point this at any OpenAI-compatible endpoint (your own gateway, a "
+            "self-hosted server). No code change needed."
+        )
         form.addRow("Base URL", self._base_url)
 
         self._test = QPushButton("Test connection")
@@ -94,12 +98,17 @@ class BuddySettingsDialog(QDialog):
         self._key.setEnabled(cls.needs_api_key)
         # 2026-07-14 (P6): driven by the provider's declared capability, not by its name, so a new
         # OpenAI-compatible provider (Muse Spark) needs no edit here.
+        # 2026-08-05: driven by the provider's declared default, never by its name — the P6
+        # `if cls.type_name == "muse_spark"` special case broke the project's own
+        # "a descriptor drives the form" rule and had to be edited for every new endpoint.
+        # The field is prefilled (not just hinted) so the endpoint is visibly editable: swap it
+        # for your own OpenAI-compatible gateway without touching code.
         self._base_url.setEnabled(cls.supports_custom_endpoint)
         self._base_url.setPlaceholderText(
-            "required — the endpoint's OpenAI-compatible root, e.g. https://api.musespark.ai/v1"
-            if cls.type_name == "muse_spark"
-            else "http://localhost:11434/v1"
+            cls.default_base_url or "the endpoint's OpenAI-compatible root"
         )
+        if cls.supports_custom_endpoint and not self._base_url.text().strip():
+            self._base_url.setText(cls.default_base_url)
         existing = _safe_get_key(cls.type_name)
         self._key.setText(existing or "")
         local_note = "" if cls.needs_api_key else "Runs locally — no data leaves this machine."

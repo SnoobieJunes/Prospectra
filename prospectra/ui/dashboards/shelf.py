@@ -7,11 +7,11 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Signal
-from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDropEvent
+from PySide6.QtCore import QMimeData, Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton
 
-from prospectra.ui.dnd.mime import read_column
+from prospectra.ui.dnd.drop_target import DropTargetMixin, drop_border_style
+from prospectra.ui.dnd.mime import ColumnPayload, read_column
 
 NUMERIC_TYPES = (
     "TINYINT",
@@ -35,8 +35,10 @@ def is_numeric(dtype: str) -> bool:
     return any(upper.startswith(t) for t in NUMERIC_TYPES)
 
 
-class ColumnShelf(QFrame):
-    """Drop one column here. Emits (dataset_id, column, dtype) — or empty strings when cleared."""
+class ColumnShelf(DropTargetMixin, QFrame):
+    """Drop one column here. Emits (dataset_id, column, dtype) — or empty strings when cleared.
+
+    2026-07-31 (P7): drop plumbing moved to DropTargetMixin (shared with every other target)."""
 
     changed = Signal(str, str, str)
 
@@ -66,11 +68,10 @@ class ColumnShelf(QFrame):
         layout.addWidget(self._role_label)
         layout.addWidget(self._value, 1)
         layout.addWidget(self._clear)
-        self._style(active=False)
+        self._drop_active(False)
 
-    def _style(self, *, active: bool) -> None:
-        colour = "#2a78d6" if active else "palette(mid)"
-        self.setStyleSheet(f"#shelf {{ border: 1px dashed {colour}; border-radius: 4px; }}")
+    def _drop_active(self, active: bool) -> None:
+        self.setStyleSheet(drop_border_style("shelf", active=active, width=1, radius=4))
 
     # -- state ---------------------------------------------------------------------------------
 
@@ -98,24 +99,10 @@ class ColumnShelf(QFrame):
     def numeric(self) -> bool:
         return bool(self.column) and is_numeric(self.dtype)
 
-    # -- drops ---------------------------------------------------------------------------------
+    # -- drops (protocol in DropTargetMixin) ---------------------------------------------------
 
-    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
-        if read_column(event.mimeData()) is not None:
-            event.acceptProposedAction()
-            self._style(active=True)
-        else:
-            event.ignore()
+    def _decode_drop(self, mime: QMimeData) -> ColumnPayload | None:
+        return read_column(mime)
 
-    def dragLeaveEvent(self, event: QDragLeaveEvent) -> None:
-        self._style(active=False)
-        super().dragLeaveEvent(event)
-
-    def dropEvent(self, event: QDropEvent) -> None:
-        payload = read_column(event.mimeData())
-        self._style(active=False)
-        if payload is None:
-            event.ignore()
-            return
-        event.acceptProposedAction()
+    def _payload_dropped(self, payload: ColumnPayload) -> None:
         self.set_column(payload.dataset_id, payload.column, payload.dtype)

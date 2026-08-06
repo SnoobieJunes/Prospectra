@@ -13,6 +13,149 @@ Entry format:
 - Commit(s): hash(es)
 ```
 
+## 2026-08-05 — P7 hardening: ~40 review findings fixed; three project rules had been broken
+- Phase: P7
+- Deviation: P7 as first written violated three of this repo's own non-negotiable rules. Four
+  adversarial reviews found ~40 defects; the significant ones are fixed in this commit and the
+  fixes are locked by tests that fail against the previous code
+  (`tests/test_mapping_injection.py`, `test_http_regressions.py`, `test_mapping_regressions.py`,
+  `test_ui_regressions.py`).
+  * **"No raw SQL is ever typed"** — `TargetColumn.type` was interpolated raw on the two compile
+    paths that skip `validate()` (`field_exprs`, `coercion_check_sql`). Opening a *shared* project
+    and pressing "Preview values" executed arbitrary statements, including writing a file
+    (reproduced). The plan had explicitly said not to copy `select.py`'s unvalidated type
+    interpolation; it was copied anyway. Now `check_type` is enforced in `_declared_type`, the one
+    choke point every path passes through, and `_TYPE_PATTERN` is `\A…\Z` (Python's `$` also
+    matched a trailing newline).
+  * **"Nothing is silent"** — the mapper displayed one transform order and compiled another
+    (`steps.remove()` matched by dataclass VALUE, so removing a repeated chip deleted the first);
+    a case-collision between a target and a passthrough column served the wrong value downstream;
+    `__lost` both undercounted (a `default()` after a cast re-filled the NULLs) and overcounted
+    (all-NULL `concat_ws` rows counted as unreadable); and `MapFieldsNode.prepare_notes` was read
+    by nothing despite a comment claiming the UI read it.
+  * **"A live write cannot happen by accident"** — a write to a redirecting URL was rewritten
+    POST→GET by httpx, dropping the body, and reported `written` (reproduced); "Run flow" had no
+    re-entrancy guard, so a double-click could start two concurrent live write jobs.
+  Also fixed: a circular import that made `import prospectra.core.http.write` crash on a cold
+  interpreter (the suite hid it by importing `core.flow` first — report types now live in
+  `core/report.py`, beneath both layers); a regression where moving auth into `send()` made
+  `params` non-empty and httpx REPLACED the URL's query, so link pagination with query auth
+  re-fetched page 1 forever; batch failures recording one key per chunk instead of per row;
+  unbounded `Retry-After`; `to_curl` printing a credential typed into a query parameter; a typed
+  token surviving a request switch and being sent to a different host; `WriteSpec.body_kind`
+  persisted but ignored; the write editor offering auth kinds it could not configure; and
+  `prospectra map` failing outright on file-backed crosswalks.
+- Why: recorded rather than quietly repaired because the failure was one of verification, not just
+  of code. The original P7 suite passed 388 tests while every defect above was present: the tests
+  encoded the same assumptions as the code, and several source comments asserted behaviour that had
+  never been exercised. The lesson is written into CLAUDE.md.
+- Commit(s): this commit
+
+## 2026-08-05 — Muse Spark: real, editable defaults; the advertised endpoint had never resolved
+- Phase: P6 (provider), fixed in P7 hardening
+- Deviation: the P6 provider instructed users to paste `https://api.musespark.ai/v1` — a hostname
+  that does not resolve — in three places. It now defaults to `https://api.meta.ai/v1` with model
+  `muse-spark-1.2`, both prefilled and editable, and the settings form reads the endpoint from the
+  new `Provider.default_base_url` descriptor instead of `if cls.type_name == "muse_spark"`.
+- Why: the app was documenting an endpoint that could never answer, and the name-based special case
+  broke the project's own "a descriptor drives the form" rule (Ollama's hardcoded localhost URL
+  moved to the same descriptor). Pointing Prospectra at any other OpenAI-compatible gateway is now
+  a settings change with no code change, which is what the provider is for.
+- Honesty: `verified` stays False. The request/response shape is proven against a scripted
+  OpenAI-compatible server (observed working, 0.5s round trip, correct payload and Bearer header),
+  and `api.meta.ai` resolves and answers `/v1/models` with HTTP 401 — reachable, wants a credential
+  — but no authenticated call has been made from this build.
+- Commit(s): this commit
+
+## 2026-08-05 — P7 findings knowingly NOT fixed in this pass
+- Phase: P7
+- Deviation: these review findings are real and remain open rather than being silently dropped.
+  * `output_dataset` writes a `.duckdb` file that Prospectra itself cannot re-open (`_READERS` has
+    no `.duckdb`, `DIALECTS` has no DuckDB entry). The node's help text and module comment now say
+    so; adding a DuckDB dialect is the fix.
+  * Saved API sources and playground requests cannot be renamed or deleted from the UI
+    (`delete_connection` exists with no caller), and saving twice under one name creates two rows.
+  * `flow_with_mapping` still has no production caller — the guided "Map to…" action was never
+    wired; the Map Fields node in the palette is the only route in.
+  * The playground can save a request into a project but nothing exports the standalone `.json`
+    that `prospectra api-send` reads, so replay means hand-writing the file.
+  * `suggest_from_values` is CLI-only by design (a flow node's target is a declared column list,
+    not a relation to sample) — the false claim in the mapper's header comment is corrected.
+  * Response rendering is unbounded: a multi-megabyte body is formatted on the GUI thread.
+- Why: each is a bounded, non-corrupting limitation with an honest statement in the code or UI,
+  whereas everything fixed above either lost data, leaked a credential, or executed arbitrary SQL.
+  Shipping the safety fixes now beats holding them behind ergonomics.
+- Commit(s): this commit
+
+## 2026-07-31 — P7: `Auth` moved to core/http (re-exported from the old path)
+- Phase: P7
+- Deviation: the plan's reuse table kept `Auth` in `core/connectors/rest/mapping.py`; it now
+  lives in `core/http/request.py`, with `mapping.py` re-exporting it unchanged.
+- Why: core/http importing Auth from the REST tier would have made the import graph circular
+  (`connectors.rest.client` imports `core.http.send`, whose package would import
+  `connectors.rest.mapping` back). Auth is an HTTP-level concern shared by the playground, the
+  paginator, and the write path; the layering is now strictly `connectors → http`. Every
+  existing import path (`from prospectra.core.connectors.rest import Auth`) still works.
+- Commit(s): this commit
+
+## 2026-07-31 — P7: Output: Local Dataset writes a DuckDB *file*, not the session catalog
+- Phase: P7
+- Deviation: the plan said `CREATE OR REPLACE TABLE … AS <sql>` "into the catalog";
+  `output_dataset` ATTACHes a `.duckdb` database file and creates the table there instead.
+- Why: a flow run executes on its own isolated in-memory connection (the P2 reproducibility
+  rule), so a table created "in the catalog" would either evaporate with the run's connection or
+  require the runner to reach into the live UI session — which headless `run-flow` does not
+  have. A database file is durable, re-openable, and identical in headless and GUI runs; the
+  same reasoning that lands scraped tables as CSVs.
+- Commit(s): this commit
+
+## 2026-07-31 — P7: coercion counters measure base→final loss, not just the last TRY_CAST
+- Phase: P7
+- Deviation: the plan specified `<target>__lost` as rows where the pre-cast expression is
+  NOT NULL and its TRY_CAST is NULL. The implementation counts rows where the field's *base*
+  value (before any step) was NOT NULL and the *final* expression (after every step and the
+  declared-type cast) is NULL, plus a separate `<target>__unmatched` counter per lookup step.
+- Why: the plan's formulation misses losses inside the step chain — a mid-chain `parse_date`
+  or `cast` step silently NULLing values would go uncounted. "Went in readable, came out NULL"
+  subsumes the plan's check and is the honest number; crosswalk misses (which COALESCE back to
+  the original, so they never look like losses) get their own stated count.
+- Commit(s): this commit
+
+## 2026-07-31 — P7: mappings and destinations persist inside flow docs, not as connection rows
+- Phase: P7
+- Deviation: the plan's data model listed connector_type discriminators `rest / rest_write /
+  field_mapping` in the connections table. Shipped: `rest` (API sources) and `http_request`
+  (saved playground requests) as connection rows; mapping documents and REST write specs
+  persist as their node's params inside the flow document instead of as connection rows.
+- Why: a mapping belongs to the flow that uses it — a second copy in the connections table
+  would be a synchronization bug waiting to happen (edit the node, stale row survives). The
+  no-new-tables constraint is still honoured, old builds still open P7 projects and ignore
+  what they don't know, and nothing needed a standalone mapping row yet; if sharing mappings
+  across flows becomes real, `field_mapping` rows can be added without a schema change.
+- Commit(s): this commit
+
+## 2026-07-31 — P7: the guided "Map to…" entry point is the canvas, not a separate command
+- Phase: P7
+- Deviation: the plan named a guided "Map to…" action generating the flow. Shipped as
+  `flow_with_mapping()` (core, tested — Input → Map Fields → Output, refusing a broken doc
+  before the flow exists) plus the Map Fields node in the palette with its full-panel mapper
+  dialog; there is no additional toolbar command that wraps them.
+- Why: the mapper lives where flows live. A second entry point would duplicate the canvas path
+  without new capability; the load-bearing promise — the drop writes a *flow*, never hidden
+  magic — is delivered and tested. If a one-click "map this dataset to that one" affordance is
+  wanted later, it is a thin caller of `flow_with_mapping`.
+- Commit(s): this commit
+
+## 2026-07-31 — P7: POST acknowledgement is a WriteSpec field, enforced at validate
+- Phase: P7
+- Deviation: the plan required "explicit acknowledgement" for POST without locating the
+  mechanism; it landed as `WriteSpec.post_acknowledged` — `validate()` refuses a POST spec
+  without it, and the node editor surfaces it as a "may create duplicates on retry" checkbox.
+- Why: putting the acknowledgement in the spec makes headless `run-flow` exactly as guarded as
+  the GUI — a CLI user cannot POST without having stored the same explicit consent the
+  checkbox records, and the caveat lives in the UI as required, not in a docstring.
+- Commit(s): this commit
+
 ## 2026-07-13 — P1 file-connector subset (T0 not complete)
 - Phase: P1
 - Deviation: the plan lists PDF tables and SPSS/Stata/SAS statistical files in the T0 file tier;

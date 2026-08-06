@@ -50,9 +50,10 @@ class RestConnector(Connector):
 
     def sample(self) -> Any:
         """One page, unpaginated — what the mapping tool infers columns from."""
+        # 2026-07-31 (P7): through the client's public seam; auth is applied inside send().
         client = self._client()
         try:
-            return client._get(self.mapping.url, {**self.mapping.params, **client._auth_params()})
+            return client.sample_page()
         finally:
             client.close()
 

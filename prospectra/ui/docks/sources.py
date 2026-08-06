@@ -9,8 +9,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QDragEnterEvent, QDragLeaveEvent, QDropEvent
+from PySide6.QtCore import QMimeData, Qt, Signal
 from PySide6.QtWidgets import (
     QDockWidget,
     QHBoxLayout,
@@ -23,7 +22,8 @@ from PySide6.QtWidgets import (
 )
 
 from prospectra.core.catalog import Dataset, SqlConnection
-from prospectra.ui.dnd.mime import DatasetPayload, dataset_mime, read_column
+from prospectra.ui.dnd.drop_target import DropTargetMixin, drop_border_style
+from prospectra.ui.dnd.mime import ColumnPayload, DatasetPayload, dataset_mime, read_column
 
 _KIND_ROLE = Qt.ItemDataRole.UserRole
 _ID_ROLE = Qt.ItemDataRole.UserRole + 1
@@ -47,8 +47,12 @@ class _SourceTree(QTreeWidget):
         return super().mimeData(items)
 
 
-class NewDatasetZone(QLabel):
-    """Drop columns here to derive a dataset from them (and get the flow that builds it)."""
+class NewDatasetZone(DropTargetMixin, QLabel):
+    """Drop columns here to derive a dataset from them (and get the flow that builds it).
+
+    2026-07-31 (P7): drop plumbing now lives in DropTargetMixin — this class keeps only what is
+    unique to it (the payload it accepts, the signal it emits, the text swap while hovering).
+    """
 
     columns_dropped = Signal(str, list)  # source dataset id, column names
 
@@ -62,39 +66,24 @@ class NewDatasetZone(QLabel):
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setWordWrap(True)
         self.setMinimumHeight(58)
-        self._style(active=False)
+        self._drop_active(False)
 
-    def _style(self, *, active: bool) -> None:
-        # Dashed border reads as "a place things go" without needing an icon set.
-        colour = "#2a78d6" if active else "palette(mid)"
+    def _decode_drop(self, mime: QMimeData) -> ColumnPayload | None:
+        return read_column(mime)
+
+    def _payload_dropped(self, payload: ColumnPayload) -> None:
+        self.columns_dropped.emit(payload.dataset_id, payload.columns)
+
+    def _drop_active(self, active: bool) -> None:
+        self.setText(self._ACTIVE if active else self._IDLE)
         weight = "bold" if active else "normal"
         self.setStyleSheet(
-            f"#new_dataset_zone {{ border: 2px dashed {colour}; border-radius: 6px; "
-            f"padding: 6px; font-weight: {weight}; }}"
+            drop_border_style(
+                "new_dataset_zone",
+                active=active,
+                extra=f"padding: 6px; font-weight: {weight};",
+            )
         )
-
-    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
-        if read_column(event.mimeData()) is not None:
-            event.acceptProposedAction()
-            self.setText(self._ACTIVE)
-            self._style(active=True)
-        else:
-            event.ignore()
-
-    def dragLeaveEvent(self, event: QDragLeaveEvent) -> None:
-        self.setText(self._IDLE)
-        self._style(active=False)
-        super().dragLeaveEvent(event)
-
-    def dropEvent(self, event: QDropEvent) -> None:
-        payload = read_column(event.mimeData())
-        self.setText(self._IDLE)
-        self._style(active=False)
-        if payload is None:
-            event.ignore()
-            return
-        event.acceptProposedAction()
-        self.columns_dropped.emit(payload.dataset_id, payload.columns)
 
 
 class SourcesDock(QDockWidget):
@@ -104,6 +93,7 @@ class SourcesDock(QDockWidget):
     scrape_requested = Signal()  # 2026-07-14 (P5)
     dataset_activated = Signal(str)  # dataset id
     table_activated = Signal(str, str)  # connection id, table name
+    api_activated = Signal(str)  # 2026-07-31 (P7): saved-API connection record id (re-fetch)
     new_dataset_requested = Signal(str, list)  # 2026-07-14 (P5): source dataset id, columns
 
     def __init__(self) -> None:
@@ -175,6 +165,23 @@ class SourcesDock(QDockWidget):
         self._connections_root.setExpanded(True)
         item.setExpanded(True)
 
+    # 2026-07-31 (P7): a saved API source from the project file — the row `list_connections()`
+    # finally has a real caller for. Activating it re-fetches the mapping (an explicit act; the
+    # rows came over the network and must never be re-pulled behind the user's back).
+    def add_saved_api(self, record_id: str, name: str, url: str) -> None:
+        item = QTreeWidgetItem([f"{name}  (saved API)"])
+        item.setToolTip(0, f"{url}\nDouble-click to fetch.")
+        item.setData(0, _KIND_ROLE, "saved_api")
+        item.setData(0, _ID_ROLE, record_id)
+        self._connections_root.addChild(item)
+        self._connections_root.setExpanded(True)
+
+    def clear_saved_apis(self) -> None:
+        for index in reversed(range(self._connections_root.childCount())):
+            child = self._connections_root.child(index)
+            if child.data(0, _KIND_ROLE) == "saved_api":
+                self._connections_root.removeChild(child)
+
     # -- interaction --------------------------------------------------------------------
 
     def _activated(self, item: QTreeWidgetItem, _column: int) -> None:
@@ -183,6 +190,8 @@ class SourcesDock(QDockWidget):
             self.dataset_activated.emit(item.data(0, _ID_ROLE))
         elif kind == "table":
             self.table_activated.emit(item.data(0, _ID_ROLE), item.text(0))
+        elif kind == "saved_api":
+            self.api_activated.emit(item.data(0, _ID_ROLE))
 
     # -- test / automation seam ----------------------------------------------------------
 

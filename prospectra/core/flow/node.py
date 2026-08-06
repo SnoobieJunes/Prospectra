@@ -13,6 +13,8 @@ from typing import Any, ClassVar, TypeVar
 
 import duckdb
 
+from prospectra.core.flow.write import WriteReport
+
 logger = logging.getLogger(__name__)
 
 ENTRY_POINT_GROUP = "prospectra.flow_nodes"
@@ -35,6 +37,10 @@ class Node(ABC):
     min_inputs: ClassVar[int] = 1
     max_inputs: ClassVar[int] = 1  # -1 = unlimited (union)
     params_schema: ClassVar[tuple[ParamField, ...]] = ()
+    # 2026-07-31 (P7): True = running this node changes something OUTSIDE the local machine's
+    # scratch space (a live API write). The runner refuses these unless explicitly allowed —
+    # "Run flow" must never fire live PUTs at a production API by accident.
+    destructive: ClassVar[bool] = False
 
     def __init__(self, params: dict[str, Any] | None = None) -> None:
         self.params: dict[str, Any] = {f.name: f.default for f in self.params_schema}
@@ -59,6 +65,15 @@ class Node(ABC):
     @abstractmethod
     def compile(self, inputs: list[str]) -> str:
         """Return a SQL SELECT statement reading from the given input relation names."""
+
+    # 2026-07-31 (P7): output nodes materialize their input somewhere by implementing this.
+    # The default RAISES: a base-class silent no-op would let a new output node "succeed"
+    # having written nothing at all, which is worse than any crash.
+    def write(
+        self, con: duckdb.DuckDBPyConnection, sql: str, *, dry_run: bool = True
+    ) -> WriteReport:
+        """Write `sql`'s rows to this node's destination; return a WriteReport."""
+        raise NotImplementedError(f"{type(self).type_name} cannot write")
 
 
 NODE_TYPES: dict[str, type[Node]] = {}

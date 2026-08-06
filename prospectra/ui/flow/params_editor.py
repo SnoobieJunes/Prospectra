@@ -1,9 +1,15 @@
+# 2026-07-31 (P7): Custom editors, keyed on `ParamField.kind` (never on node type — a descriptor
+# drives the form, per the project's dialect rule). And the QLineEdit fallthrough for unknown
+# kinds is GONE: it used to `str(dict)` a structured param into a text box and write the Python
+# repr back on the next keystroke — data loss, not cosmetics. An unknown kind now renders a
+# read-only notice that cannot write anything back.
 # 2026-07-13 (P2): Generic params editor — renders a form straight from a node's `params_schema`,
 # so a new node type needs no bespoke dialog (the modularity promise in CLAUDE.md: add one file,
 # get a full UI). Edits write back to the node and announce a change.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from PySide6.QtCore import Signal
@@ -23,6 +29,16 @@ from PySide6.QtWidgets import (
 )
 
 from prospectra.core.flow.graph import NodeInstance
+from prospectra.core.flow.node import ParamField
+
+# kind -> factory(editor, instance, field) -> widget. Consulted BEFORE the built-in kinds, so a
+# package (ui/mapping registers "mapping_doc") or a plugin can own an editor without this file
+# knowing it exists.
+CUSTOM_EDITORS: dict[str, Callable[[ParamsEditor, NodeInstance, ParamField], QWidget]] = {}
+
+# The kinds the generic factory below actually understands. Anything else must come from
+# CUSTOM_EDITORS or it gets a read-only notice — never a QLineEdit.
+_BUILTIN_KINDS = ("string", "columns", "expression", "choice", "bool", "int", "float", "path")
 
 
 class ParamsEditor(QWidget):
@@ -30,6 +46,9 @@ class ParamsEditor(QWidget):
 
     def __init__(self) -> None:
         super().__init__()
+        # 2026-07-31 (P7): the hosting workspace (FlowTab), for custom editors that need flow
+        # services (upstream columns, previews). None when the editor stands alone.
+        self.host: object | None = None
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(6, 6, 6, 6)
         self._title = QLabel("Select a node")
@@ -54,9 +73,18 @@ class ParamsEditor(QWidget):
         form = QFormLayout(host)
         form.setContentsMargins(0, 4, 0, 0)
         for field in type(node).params_schema:
-            widget = self._make_widget(
-                field.kind, field.name, node.params.get(field.name, ""), field.choices
-            )
+            custom = CUSTOM_EDITORS.get(field.kind)
+            if custom is not None:
+                widget = custom(self, instance, field)
+            elif field.kind in _BUILTIN_KINDS:
+                widget = self._make_widget(
+                    field.kind, field.name, node.params.get(field.name, ""), field.choices
+                )
+            else:
+                # No editor knows this kind. A disabled label can NOT corrupt the value the way
+                # the old QLineEdit fallthrough did (str(dict) written back on focus-out).
+                widget = QLabel(f"(no editor for {field.kind!r} — value left untouched)")
+                widget.setEnabled(False)
             if field.help:
                 widget.setToolTip(field.help)
             form.addRow(field.label, widget)

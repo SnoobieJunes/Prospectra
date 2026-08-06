@@ -14,6 +14,8 @@ _PLACEHOLDERS: tuple[tuple[str, str], ...] = (
     ("Analyze", "Mining engine — arrives in phase P3.\nCorrelation scan, regressions, ANOVA, PCA."),
     # 2026-07-14 (P5): the real DashboardTab is passed in as an override by the main window.
     ("Dashboards", "Dashboards — drag columns onto chart shelves."),
+    # 2026-07-31 (P7): the API playground — explore an endpoint, then save it as a data source.
+    ("API", "API playground — explore an endpoint, save requests, promote them to data sources."),
 )
 
 

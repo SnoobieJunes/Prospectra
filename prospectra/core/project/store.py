@@ -270,6 +270,12 @@ class ProjectStore:
         self._conn.commit()
 
     # -- connections ---------------------------------------------------------------
+    # 2026-07-31 (P7): upsert-by-id (the save_dashboard pattern) — re-saving an open API source or
+    # playground request updates it in place instead of littering the project with copies. P7 rows
+    # (playground requests, field mappings, REST destinations) live HERE, discriminated by
+    # connector_type, because ProjectStore.open() has no migration path: a new table would force
+    # SCHEMA_VERSION = 2 and make every touched project unopenable by older builds. Old builds
+    # open the file and simply ignore connector types they don't know.
 
     def save_connection(
         self,
@@ -277,31 +283,54 @@ class ProjectStore:
         connector_type: str,
         config: dict[str, Any] | None = None,
         secret_ref: str | None = None,
+        connection_id: str | None = None,
     ) -> ConnectionRecord:
         now = _now()
-        conn_id = uuid.uuid4().hex
+        conn_id = connection_id or uuid.uuid4().hex
+        row = self._conn.execute(
+            "SELECT created_at FROM connections WHERE id = ?", (conn_id,)
+        ).fetchone()
+        created = str(row["created_at"]) if row else now
         self._conn.execute(
             "INSERT INTO connections(id, name, connector_type, config_json, secret_ref, "
-            "created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?)",
-            (conn_id, name, connector_type, json.dumps(config or {}), secret_ref, now, now),
+            "created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET "
+            "name = excluded.name, connector_type = excluded.connector_type, "
+            "config_json = excluded.config_json, secret_ref = excluded.secret_ref, "
+            "updated_at = excluded.updated_at",
+            (conn_id, name, connector_type, json.dumps(config or {}), secret_ref, created, now),
         )
         self._conn.commit()
-        return ConnectionRecord(conn_id, name, connector_type, config or {}, secret_ref, now, now)
+        return ConnectionRecord(
+            conn_id, name, connector_type, config or {}, secret_ref, created, now
+        )
+
+    def get_connection(self, connection_id: str) -> ConnectionRecord:
+        row = self._conn.execute(
+            "SELECT * FROM connections WHERE id = ?", (connection_id,)
+        ).fetchone()
+        if row is None:
+            raise ProjectStoreError(f"No connection with id {connection_id!r}")
+        return _connection_from_row(row)
+
+    def delete_connection(self, connection_id: str) -> None:
+        self._conn.execute("DELETE FROM connections WHERE id = ?", (connection_id,))
+        self._conn.commit()
 
     def list_connections(self) -> list[ConnectionRecord]:
         rows = self._conn.execute("SELECT * FROM connections ORDER BY created_at").fetchall()
-        return [
-            ConnectionRecord(
-                id=str(r["id"]),
-                name=str(r["name"]),
-                connector_type=str(r["connector_type"]),
-                config=json.loads(r["config_json"]),
-                secret_ref=r["secret_ref"],
-                created_at=str(r["created_at"]),
-                updated_at=str(r["updated_at"]),
-            )
-            for r in rows
-        ]
+        return [_connection_from_row(r) for r in rows]
+
+
+def _connection_from_row(row: sqlite3.Row) -> ConnectionRecord:
+    return ConnectionRecord(
+        id=str(row["id"]),
+        name=str(row["name"]),
+        connector_type=str(row["connector_type"]),
+        config=json.loads(row["config_json"]),
+        secret_ref=row["secret_ref"],
+        created_at=str(row["created_at"]),
+        updated_at=str(row["updated_at"]),
+    )
 
 
 def _flow_from_row(row: sqlite3.Row) -> FlowRecord:
